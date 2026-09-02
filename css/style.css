@@ -1,0 +1,776 @@
+/* ---------- Design tokens ---------- */
+:root {
+  --bg: #F2E4C6;
+  --surface: #E9D6AC;
+  --surface-raised: #EFDDB6;
+  --line: #C9A96E;
+  --ink: #3B2A18;
+  --ink-soft: #6B563A;
+  --amber: #C8791E;
+  --amber-deep: #A2540F;
+  --ember: #B4432A;
+  --good: #5C7A45;
+  --shadow: rgba(59, 42, 24, 0.18);
+
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "Work Sans", -apple-system, sans-serif;
+}
+
+[data-theme="dark"] {
+  --bg: #221609;
+  --surface: #32220F;
+  --surface-raised: #3C2A14;
+  --line: #5B4426;
+  --ink: #F3E4C6;
+  --ink-soft: #C4AC82;
+  --amber: #E0972F;
+  --amber-deep: #F2AC4C;
+  --ember: #E06B45;
+  --good: #8FB56E;
+  --shadow: rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------- Pages ---------- */
+#page-container {
+  flex: 1;
+  padding: 1.5rem 1.25rem 7.7rem;
+  overflow-y: auto;
+}
+
+.page[hidden] { display: none; }
+
+.placeholder {
+  margin-top: 3rem;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+/* ---------- Bottom nav ---------- */
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 0;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  /* The bar used to be lifted clear of Netlify's "Built on Netlify" badge
+     with a margin-bottom, which pushed the whole bar (background and all)
+     up and left a strip of the lighter page background exposed beneath
+     it. Instead, keep the bar flush to the bottom and add that same
+     19px as extra bottom padding: the dark background/border now extend
+     all the way down over the badge area, while the icons stay put --
+     the extra space is added below them, not around them. */
+  padding: 0.5rem 0.4rem calc(0.6rem + 19px + env(safe-area-inset-bottom));
+}
+
+.nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.68rem;
+  padding: 0.35rem 0.2rem;
+  cursor: pointer;
+}
+
+.nav-btn svg { stroke: currentColor; }
+
+.nav-btn.is-active { color: var(--amber-deep); }
+
+/* ---------- Tuner ---------- */
+.tuner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 1.25rem;
+}
+
+.tuner__mic-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.4rem;
+}
+
+.mic-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--amber);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 0.75rem 1.4rem;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 3px 0 var(--amber-deep);
+}
+
+.mic-button:active { box-shadow: none; transform: translateY(3px); }
+
+.mic-button.is-listening {
+  background: var(--ember);
+  box-shadow: 0 3px 0 var(--amber-deep);
+}
+
+.tuner__hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  min-height: 1.1em;
+  opacity: 1;
+  transition: opacity 0.22s ease;
+}
+
+.tuner__hint.is-fading { opacity: 0; }
+
+.meter { width: 100%; max-width: 320px; }
+
+#meter-track { stroke: var(--line); }
+#meter-needle { stroke: var(--amber-deep); transition: transform 0.12s ease-out; transform-origin: 150px 160px; }
+#meter-hub { fill: var(--amber-deep); }
+
+.meter-tick { stroke: var(--ink-soft); stroke-width: 1.5; }
+.meter-tick.center { stroke: var(--ink); stroke-width: 2.5; }
+
+.tuner__readout {
+  text-align: center;
+  margin-top: -0.4rem;
+}
+
+.tuner__note {
+  font-family: var(--font-display);
+  font-size: 3.4rem;
+  line-height: 1;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+#confirm-check {
+  color: var(--good);
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.tuner__note.confirmed #confirm-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.tuner__note.confirmed {
+  animation: note-pop 0.35s ease;
+}
+
+@keyframes note-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+.tuner__cents {
+  font-size: 1.05rem;
+  color: var(--ink-soft);
+  margin-top: 0.3rem;
+}
+
+.tuner__cents span { font-size: 0.85rem; }
+
+.tuner__freq {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  margin-top: 0.15rem;
+}
+
+.tuner__note.in-tune { color: var(--good); }
+
+.tuner__strings {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.4rem 0 1.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.string-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  background: var(--surface);
+}
+
+.string-chip {
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.string-chip.active {
+  border-color: var(--amber-deep);
+  color: var(--amber-deep);
+  background: var(--surface-raised);
+}
+
+.string-chip.done {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.field-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.field-row label { font-size: 0.9rem; color: var(--ink-soft); }
+
+select {
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  text-align: right;
+}
+
+/* ---------- Metronome ---------- */
+.metronome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 1rem;
+}
+
+.metro-meter { width: 100%; max-width: 230px; }
+
+#metro-meter-track { stroke: var(--line); }
+#metro-needle {
+  stroke: var(--amber-deep);
+  transform-origin: 100px 138px;
+  transition-property: transform;
+  transition-timing-function: linear;
+}
+#metro-hub { fill: var(--amber-deep); }
+
+.metronome__beats {
+  display: flex;
+  gap: 0.55rem;
+  margin: 0.4rem 0 1.3rem;
+}
+
+.beat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  transition: background 0.1s ease, border-color 0.1s ease, transform 0.1s ease;
+}
+
+.beat-dot.accent { width: 12px; height: 12px; }
+
+.beat-dot.active {
+  background: var(--amber-deep);
+  border-color: var(--amber-deep);
+  transform: scale(1.15);
+}
+
+.metronome__bpm-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  margin-bottom: 1.1rem;
+}
+
+.metro-step {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.metro-step:active { transform: translateY(1px); }
+
+.metronome__bpm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 112px;
+}
+
+.metronome__bpm-input {
+  width: 112px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  font-weight: 500;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.metronome__bpm-input::-webkit-outer-spin-button,
+.metronome__bpm-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.metronome__bpm-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.tap-button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.6rem 1.5rem;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.9rem;
+  margin-bottom: 1.1rem;
+  cursor: pointer;
+}
+
+.tap-button:active { transform: translateY(1px); }
+
+.metronome .field-row { margin-bottom: 1.1rem; }
+
+.metronome__toggle { min-width: 140px; justify-content: center; }
+
+/* ---------- Library ---------- */
+.library {
+  display: flex;
+  flex-direction: column;
+  padding-top: 0.25rem;
+}
+
+.library__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.library__title {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.add-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--amber);
+  color: var(--bg);
+  box-shadow: 0 3px 0 var(--amber-deep);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.add-button:active { box-shadow: none; transform: translateY(3px); }
+
+.library__empty {
+  margin-top: 3rem;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.library__empty p { margin: 0.2rem 0; }
+
+/* Shared song list, used by the library, search results and (later) other
+   song pickers -- one row template for all of them. */
+.song-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.song-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.song-item:active { transform: translateY(1px); }
+
+.song-item__art {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.song-item__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.song-item__title {
+  font-size: 0.92rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.song-item__artist {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.1rem;
+}
+
+.song-item__fav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--line);
+  cursor: pointer;
+}
+
+.song-item__fav[aria-pressed="true"] {
+  color: var(--amber-deep);
+}
+
+.song-item__fav[aria-pressed="true"] svg path {
+  fill: currentColor;
+}
+
+.search-status {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  min-height: 1.2em;
+  margin: 0 0 0.7rem;
+}
+
+/* ---------- Overlays (search / song detail) ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 1.5rem;
+  overflow-y: auto;
+}
+
+.overlay[hidden] { display: none; }
+
+.overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.overlay__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.overlay__back:active { transform: translateY(1px); }
+
+.overlay__search-input {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+}
+
+.overlay__search-input::placeholder { color: var(--ink-soft); }
+
+.overlay__fav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--line);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.2s ease;
+}
+
+.overlay__fav[aria-pressed="true"] { color: var(--amber-deep); }
+.overlay__fav[aria-pressed="true"] svg path { fill: currentColor; }
+
+/* ---------- Song detail ---------- */
+.song-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding-top: 1rem;
+}
+
+.song-detail__art {
+  width: 168px;
+  height: 168px;
+  border-radius: 16px;
+  object-fit: cover;
+  background: var(--surface-raised);
+  box-shadow: 0 6px 16px var(--shadow);
+  margin-bottom: 1.2rem;
+}
+
+.song-detail__title {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 500;
+  margin: 0 0 0.2rem;
+}
+
+.song-detail__artist {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.song-detail__meta {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin: 0.15rem 0 1.4rem;
+}
+
+.save-button {
+  border: 1px solid var(--amber-deep);
+  background: transparent;
+  color: var(--amber-deep);
+  border-radius: 999px;
+  padding: 0.7rem 1.6rem;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.save-button.is-saved {
+  background: var(--amber);
+  color: var(--bg);
+  border-color: var(--amber);
+}
+
+.save-button:active { transform: translateY(1px); }
+
+.song-detail__note {
+  margin-top: 1.6rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  max-width: 30ch;
+}
+
+/* ---------- Song detail: external chord / tab links ---------- */
+.song-links {
+  width: 100%;
+  margin-top: 1.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.7rem;
+  text-align: left;
+}
+
+.song-links__group {
+  display: flex;
+  flex-direction: column;
+}
+
+.song-links__heading {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 500;
+  margin: 0 0 0.25rem;
+}
+
+.song-links__sub {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  margin: 0 0 0.7rem;
+}
+
+.song-links__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.source-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  text-decoration: none;
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.source-link:active { transform: translateY(1px); }
+
+.source-link svg {
+  color: var(--ink-soft);
+  flex-shrink: 0;
+}
+
+/* ---------- Settings ---------- */
+.settings-list {
+  padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.settings-row__title { font-size: 0.95rem; }
+.settings-row__desc { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.15rem; }
+
+.theme-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  align-items: center;
+  width: 44px;
+  height: 26px;
+  margin: 0;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font: inherit;
+  line-height: 0;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.theme-toggle__thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+/* Flexbox (align-items: center + equal padding) centers the thumb on both
+   axes automatically -- no hand-tuned top/left offsets to drift out of
+   sync with the track size again. */
+.theme-toggle[aria-pressed="true"] .theme-toggle__thumb { transform: translateX(18px); }

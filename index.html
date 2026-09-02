@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guitar</title>
+<meta name="theme-color" content="#241811">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Guitar">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-theme="light">
+
+<div class="app">
+
+  <main id="page-container">
+
+    <!-- TUNER -->
+    <section class="page" id="page-tuner" data-page="tuner">
+      <div class="tuner">
+
+        <div class="tuner__mic-row">
+          <button id="mic-toggle" class="mic-button" type="button" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 19v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <span id="mic-toggle-label">Start tuning</span>
+          </button>
+          <p class="tuner__hint" id="tuner-hint">Tap start and play a single string.</p>
+        </div>
+
+        <svg id="meter" class="meter" viewBox="0 0 300 180" role="img" aria-label="Tuning meter">
+          <path id="meter-track" d="M20 160 A130 130 0 0 1 280 160" fill="none" stroke-width="10" stroke-linecap="round"/>
+          <g id="meter-ticks"></g>
+          <line id="meter-needle" x1="150" y1="160" x2="150" y2="45" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="150" cy="160" r="6" id="meter-hub"/>
+        </svg>
+
+        <div class="tuner__readout">
+          <div class="tuner__note" id="note-name">
+            <span id="note-name-text">–</span>
+            <svg id="confirm-check" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M5 13l4.5 4.5L19 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="tuner__cents" id="cents-value">0 <span>cents</span></div>
+          <div class="tuner__freq" id="freq-value">– Hz</div>
+        </div>
+
+        <div class="tuner__strings" id="string-targets" aria-hidden="true"></div>
+
+        <div class="field-row">
+          <label for="tuning-select">Tuning</label>
+          <select id="tuning-select">
+            <option value="standard" selected>Standard (E A D G B E)</option>
+            <option value="dropD">Drop D</option>
+            <option value="openG">Open G</option>
+            <option value="openD">Open D</option>
+            <option value="halfStepDown">Half Step Down</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- METRONOME -->
+    <section class="page" id="page-metronome" data-page="metronome" hidden>
+      <div class="metronome">
+
+        <svg id="metro-meter" class="metro-meter" viewBox="0 0 200 150" role="img" aria-label="Metronome beat">
+          <path id="metro-meter-track" d="M20 138 A100 100 0 0 1 180 138" fill="none" stroke-width="8" stroke-linecap="round"/>
+          <line id="metro-needle" x1="100" y1="138" x2="100" y2="30" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="100" cy="138" r="6" id="metro-hub"/>
+        </svg>
+
+        <div class="metronome__beats" id="metro-beats" aria-hidden="true"></div>
+
+        <div class="metronome__bpm-row">
+          <button id="metro-bpm-minus" class="metro-step" type="button" aria-label="Decrease tempo">–</button>
+          <div class="metronome__bpm">
+            <input id="metro-bpm-input" class="metronome__bpm-input" type="number" inputmode="numeric" min="30" max="300" value="100">
+            <span class="metronome__bpm-label">BPM</span>
+          </div>
+          <button id="metro-bpm-plus" class="metro-step" type="button" aria-label="Increase tempo">+</button>
+        </div>
+
+        <button id="metro-tap" class="tap-button" type="button">Tap tempo</button>
+
+        <div class="field-row">
+          <label for="metro-signature">Time signature</label>
+          <select id="metro-signature">
+            <option value="2/4">2/4</option>
+            <option value="3/4">3/4</option>
+            <option value="4/4" selected>4/4</option>
+            <option value="5/4">5/4</option>
+            <option value="6/8">6/8</option>
+            <option value="7/8">7/8</option>
+          </select>
+        </div>
+
+        <button id="metro-toggle" class="mic-button metronome__toggle" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path id="metro-toggle-icon" d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>
+          <span id="metro-toggle-label">Start</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- LIBRARY -->
+    <section class="page" id="page-library" data-page="library" hidden>
+      <div class="library">
+        <div class="library__header">
+          <h1 class="library__title">Library</h1>
+          <button id="library-add-btn" class="add-button" type="button" aria-label="Add song">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="library__empty" id="library-empty" hidden>
+          <p>No songs saved yet.</p>
+          <p>Tap the + button to search and add one.</p>
+        </div>
+
+        <ul class="song-list" id="library-list"></ul>
+      </div>
+
+      <!-- Search overlay -->
+      <div class="overlay" id="search-overlay" hidden>
+        <div class="overlay__header">
+          <button id="search-back" class="overlay__back" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <input id="search-input" class="overlay__search-input" type="search" placeholder="Title, artist or album…" autocomplete="off">
+        </div>
+        <p class="search-status" id="search-status"></p>
+        <ul class="song-list" id="search-results"></ul>
+      </div>
+
+      <!-- Song detail overlay -->
+      <div class="overlay" id="detail-overlay" hidden>
+        <div class="overlay__header">
+          <button id="detail-back" class="overlay__back" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="detail-favorite-btn" class="overlay__fav" type="button" aria-label="Toggle favorite" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3.8l2.55 5.4 5.7.66-4.24 4.03 1.13 5.86L12 16.9l-5.14 2.85 1.13-5.86-4.24-4.03 5.7-.66Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="song-detail" id="song-detail">
+          <img class="song-detail__art" id="detail-art" alt="">
+          <h2 class="song-detail__title" id="detail-title"></h2>
+          <p class="song-detail__artist" id="detail-artist"></p>
+          <p class="song-detail__meta" id="detail-meta"></p>
+          <button id="detail-save-btn" class="save-button" type="button">Save to Library</button>
+
+          <div class="song-links">
+            <div class="song-links__group">
+              <h3 class="song-links__heading">Chords</h3>
+              <p class="song-links__sub">Lyrics with the chords to play above them — for strumming and campfire play.</p>
+              <div class="song-links__buttons" id="detail-chord-links"></div>
+            </div>
+            <div class="song-links__group">
+              <h3 class="song-links__heading">Tabs</h3>
+              <p class="song-links__sub">String-by-string tablature — for fingerpicking parts and solos.</p>
+              <div class="song-links__buttons" id="detail-tab-links"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page" id="page-settings" data-page="settings" hidden>
+      <div class="settings-list">
+        <div class="settings-row">
+          <div>
+            <div class="settings-row__title">Theme</div>
+            <div class="settings-row__desc">Campfire in daylight or by the embers.</div>
+          </div>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">
+            <span class="theme-toggle__thumb"></span>
+          </button>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row__title">Default tuning</div>
+            <div class="settings-row__desc">Used when the tuner opens.</div>
+          </div>
+          <select id="default-tuning-select">
+            <option value="standard" selected>Standard</option>
+            <option value="dropD">Drop D</option>
+            <option value="openG">Open G</option>
+            <option value="openD">Open D</option>
+            <option value="halfStepDown">Half Step Down</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="bottom-nav" aria-label="Main">
+    <button class="nav-btn is-active" data-target="tuner" type="button">
+      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>Tuner</span>
+    </button>
+    <button class="nav-btn" data-target="metronome" type="button">
+      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 8V5m-3 0h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 9 l4 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <span>Metronome</span>
+    </button>
+    <button class="nav-btn" data-target="library" type="button">
+      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 4.5c2 -0.8 4.3 -0.8 6.5 0v15c-2.2 -0.8 -4.5 -0.8 -6.5 0Z M18.5 4.5c-2 -0.8 -4.3 -0.8 -6.5 0v15c2.2 -0.8 4.5 -0.8 6.5 0Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <span>Library</span>
+    </button>
+    <button class="nav-btn" data-target="settings" type="button">
+      <svg viewBox="0 0 24 24" width="21" height="21"><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6"/><g stroke-linecap="round"><line x1="12" y1="2.4" x2="12" y2="4.9"/><line x1="12" y1="19.1" x2="12" y2="21.6"/><line x1="2.4" y1="12" x2="4.9" y2="12"/><line x1="19.1" y1="12" x2="21.6" y2="12"/><line x1="5.4" y1="5.4" x2="7.2" y2="7.2"/><line x1="16.8" y1="16.8" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="16.8" y2="7.2"/><line x1="7.2" y1="16.8" x2="5.4" y2="18.6"/></g></g></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
+
+</div>
+
+<script src="js/tuner.js"></script>
+<script src="js/metronome-engine.js"></script>
+<script src="js/app.js"></script>
+<script src="js/metronome.js"></script>
+<script src="js/library.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
