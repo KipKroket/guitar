@@ -754,6 +754,28 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 
 .overlay__search-input::placeholder { color: var(--ink-soft); }
 
+.overlay__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Spotify green is a brand colour -- it stays put in both themes. */
+.header-spotify-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #1db954;
+  color: #fff;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.header-spotify-btn:active { transform: translateY(1px); }
+
 .overlay__fav {
   display: flex;
   align-items: center;

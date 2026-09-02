@@ -40,6 +40,7 @@
   const songLinksEl = document.getElementById("song-links");
   const detailMetronomeBtn = document.getElementById("detail-metronome-btn");
   const detailBpmValue = document.getElementById("detail-bpm-value");
+  const detailSpotifyBtn = document.getElementById("detail-spotify-btn");
 
   const customToggle = document.getElementById("custom-song-toggle");
   const customForm = document.getElementById("custom-song-form");
@@ -445,6 +446,13 @@
     detailArtist.textContent = song.artist || "";
     detailArtist.hidden = !song.artist;
     setDetailMeta(null);
+
+    // Opens the track in the Spotify app (or web player) via a search deep
+    // link -- we only have iTunes metadata, not a Spotify track id, and
+    // resolving one needs an authenticated API. Works for custom songs too.
+    const spotifyQuery = `${song.artist || ""} ${cleanTitleForSearch(song.title)}`.trim();
+    detailSpotifyBtn.href =
+      "https://open.spotify.com/search/" + encodeURIComponent(spotifyQuery);
 
     // Custom songs have no external chord/tab pages and no catalogue tempo --
     // the detail view is then just art + title + save/remove.
