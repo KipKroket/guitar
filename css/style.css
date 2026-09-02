@@ -57,7 +57,7 @@ body {
 /* ---------- Pages ---------- */
 #page-container {
   flex: 1;
-  padding: 1.5rem 1.25rem 7.7rem;
+  padding: 1.5rem 1.25rem 6.5rem;
   overflow-y: auto;
 }
 
@@ -81,14 +81,7 @@ body {
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--line);
-  /* The bar used to be lifted clear of Netlify's "Built on Netlify" badge
-     with a margin-bottom, which pushed the whole bar (background and all)
-     up and left a strip of the lighter page background exposed beneath
-     it. Instead, keep the bar flush to the bottom and add that same
-     19px as extra bottom padding: the dark background/border now extend
-     all the way down over the badge area, while the icons stay put --
-     the extra space is added below them, not around them. */
-  padding: 0.5rem 0.4rem calc(0.6rem + 19px + env(safe-area-inset-bottom));
+  padding: 0.5rem 0.4rem calc(0.6rem + env(safe-area-inset-bottom));
 }
 
 .nav-btn {

@@ -3,7 +3,13 @@
 // to the library -- only "Save" persists it).
 (function () {
   const STORAGE_KEY = "guitar-library";
-  const SEARCH_DEBOUNCE_MS = 400;
+  const SEARCH_DEBOUNCE_MS = 550;
+  // The iTunes endpoint occasionally drops a request (a brief rate-limit spike
+  // returns a 403 with no CORS header, which the browser surfaces as a plain
+  // network error). One quiet retry after a short pause turns almost all of
+  // those back into a normal result instead of an error message.
+  const SEARCH_RETRIES = 1;
+  const SEARCH_RETRY_DELAY_MS = 1200;
 
   /* ---------- Elements ---------- */
   const addBtn = document.getElementById("library-add-btn");
@@ -188,11 +194,24 @@
 
     const url =
       `${ITUNES_SEARCH_URL}?media=music&entity=song&limit=25&term=${encodeURIComponent(term)}`;
+    const signal = searchAbortController.signal;
+
+    async function fetchResults() {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await fetch(url, { signal });
+          if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+          return await res.json();
+        } catch (err) {
+          if (err.name === "AbortError" || attempt >= SEARCH_RETRIES) throw err;
+          await new Promise((r) => setTimeout(r, SEARCH_RETRY_DELAY_MS));
+          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        }
+      }
+    }
 
     try {
-      const res = await fetch(url, { signal: searchAbortController.signal });
-      if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-      const data = await res.json();
+      const data = await fetchResults();
       const results = dedupeByTrack((data.results || []).map(itunesResultToSong));
 
       if (results.length === 0) {
@@ -205,7 +224,8 @@
       });
     } catch (err) {
       if (err.name === "AbortError") return; // superseded by a newer search
-      searchStatusEl.textContent = "Couldn't reach the music search. Check your connection.";
+      searchStatusEl.textContent =
+        "Couldn't reach the music search. Check your connection, or try again in a moment.";
     }
   }
 

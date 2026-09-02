@@ -3,7 +3,7 @@
 // Song search (iTunes API) and the external chord/tab links still need a
 // connection; everything else — tuner, metronome, saved library — works offline.
 
-const CACHE = "guitar-v1";
+const CACHE = "guitar-v2";
 
 const SHELL = [
   "./",
@@ -51,26 +51,25 @@ self.addEventListener("fetch", (event) => {
   const isFont =
     url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
 
-  // App shell + local assets: serve from cache first, refresh in the background.
-  if (sameOrigin || isFont) {
-    event.respondWith(
-      caches.match(request).then((cached) => {
-        const network = fetch(request)
-          .then((res) => {
-            if (res && res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE).then((cache) => cache.put(request, copy));
-            }
-            return res;
-          })
-          .catch(() => cached);
-        return cached || network;
-      })
-    );
-    return;
-  }
+  // Only the app shell + fonts go through the worker. Everything else
+  // (the iTunes search API, external chord/tab links) is left entirely to
+  // the browser -- intercepting it here only risks turning a transient blip
+  // into a hard failure, and an offline cache can't answer a live search.
+  if (!sameOrigin && !isFont) return;
 
-  // Everything else (iTunes search, etc.): network only, fall back to cache
-  // if we happen to have it.
-  event.respondWith(fetch(request).catch(() => caches.match(request)));
+  // App shell + local assets: serve from cache first, refresh in the background.
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const network = fetch(request)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy));
+          }
+          return res;
+        })
+        .catch(() => cached);
+      return cached || network;
+    })
+  );
 });
