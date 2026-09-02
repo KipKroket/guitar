@@ -3,7 +3,7 @@
 // Song search (iTunes API) and the external chord/tab links still need a
 // connection; everything else — tuner, metronome, saved library — works offline.
 
-const CACHE = "guitar-v2";
+const CACHE = "guitar-v3";
 
 const SHELL = [
   "./",

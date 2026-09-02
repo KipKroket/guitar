@@ -30,6 +30,39 @@
   --shadow: rgba(0, 0, 0, 0.45);
 }
 
+/* ---------- Piano palette ----------
+   Same layout, cooler skin: ivory-and-slate instead of campfire amber. The
+   attribute selector on `body` outranks the plain `[data-theme]` rules, and
+   the combined `body[data-instrument][data-theme="dark"]` rule outranks
+   this one, so the four combinations resolve cleanly. */
+body[data-instrument="piano"] {
+  --bg: #ECEEF2;
+  --surface: #E1E4EB;
+  --surface-raised: #F5F6F9;
+  --line: #B6BCC9;
+  --ink: #23262D;
+  --ink-soft: #59606F;
+  --amber: #45618F;
+  --amber-deep: #2E4568;
+  --ember: #7A4E8C;
+  --good: #4E7A5C;
+  --shadow: rgba(28, 33, 43, 0.16);
+}
+
+body[data-instrument="piano"][data-theme="dark"] {
+  --bg: #14171C;
+  --surface: #1E222A;
+  --surface-raised: #272C36;
+  --line: #3C424E;
+  --ink: #EDEFF3;
+  --ink-soft: #A7AEBC;
+  --amber: #7098CE;
+  --amber-deep: #95AFDD;
+  --ember: #BC93CD;
+  --good: #85B393;
+  --shadow: rgba(0, 0, 0, 0.5);
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -102,6 +135,10 @@ body {
 .nav-btn svg { stroke: currentColor; }
 
 .nav-btn.is-active { color: var(--amber-deep); }
+
+/* Piano mode has no tuner -- drop the button and the remaining three space
+   themselves evenly (each is still flex: 1). */
+body[data-instrument="piano"] .nav-btn--tuner { display: none; }
 
 /* ---------- Tuner ---------- */
 .tuner {
@@ -425,6 +462,34 @@ select {
 
 .add-button:active { box-shadow: none; transform: translateY(3px); }
 
+.library__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Secondary, outline style -- sits to the left of the filled + button and
+   shows the icon of whichever instrument is currently active. */
+.instrument-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.instrument-toggle:active { transform: translateY(1px); }
+
+.instrument-toggle .tog-icon { display: none; }
+body[data-instrument="guitar"] .instrument-toggle .tog-icon--guitar { display: block; }
+body[data-instrument="piano"] .instrument-toggle .tog-icon--piano { display: block; }
+
 .library__empty {
   margin-top: 3rem;
   text-align: center;
@@ -669,6 +734,10 @@ select {
   display: flex;
   flex-direction: column;
 }
+
+/* Author `display` beats the UA [hidden] rule, so hiding the Tabs group in
+   piano mode needs to be spelled out. */
+.song-links__group[hidden] { display: none; }
 
 .song-links__heading {
   font-family: var(--font-display);

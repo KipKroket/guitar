@@ -31,8 +31,10 @@
   /* ---------- Navigation ---------- */
   const navButtons = document.querySelectorAll(".nav-btn");
   const pages = document.querySelectorAll(".page");
+  let currentPage = null;
 
   function showPage(target) {
+    currentPage = target;
     pages.forEach((p) => (p.hidden = p.dataset.page !== target));
     navButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.target === target));
   }
@@ -41,10 +43,48 @@
     btn.addEventListener("click", () => showPage(btn.dataset.target));
   });
 
-  // Exposed so other pages (e.g. the future song library's "Play with
-  // metronome" button) can switch tabs without needing their own copy of
-  // the nav logic.
-  window.GuitarApp = { showPage };
+  /* ---------- Instrument mode (guitar / piano) ---------- */
+  // The app doubles as a piano companion. The mode is global: it swaps the
+  // colour palette (see [data-instrument] in the CSS), hides the tuner from
+  // the bottom nav, and gives the library its own separate list and its own
+  // set of chord-lookup sites (handled in library.js, which listens for the
+  // "instrumentchange" event dispatched below).
+  const INSTRUMENTS = ["guitar", "piano"];
+  let instrument = localStorage.getItem("guitar-instrument");
+  if (!INSTRUMENTS.includes(instrument)) instrument = "guitar";
+  document.body.dataset.instrument = instrument;
+
+  const instrumentToggle = document.getElementById("instrument-toggle");
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+
+  // Keep the mobile status-bar tint in step with whatever palette is active.
+  function syncThemeColor() {
+    if (!themeColorMeta) return;
+    const bg = getComputedStyle(document.body).getPropertyValue("--bg").trim();
+    if (bg) themeColorMeta.setAttribute("content", bg);
+  }
+
+  function setInstrument(next) {
+    if (!INSTRUMENTS.includes(next) || next === instrument) return;
+    instrument = next;
+    document.body.dataset.instrument = next;
+    localStorage.setItem("guitar-instrument", next);
+    // The tuner tab is guitar-only; if it's on screen when switching to
+    // piano, step back to the library (where piano mode lives).
+    if (next === "piano" && currentPage === "tuner") showPage("library");
+    syncThemeColor();
+    document.dispatchEvent(new CustomEvent("instrumentchange", { detail: { instrument: next } }));
+  }
+
+  if (instrumentToggle) {
+    instrumentToggle.addEventListener("click", () => {
+      setInstrument(instrument === "guitar" ? "piano" : "guitar");
+    });
+  }
+
+  // Exposed so the song library can read the current instrument and switch
+  // tabs without needing its own copy of this logic.
+  window.GuitarApp = { showPage, getInstrument: () => instrument };
 
   /* ---------- Theme ---------- */
   const themeToggle = document.getElementById("theme-toggle");
@@ -57,6 +97,7 @@
     document.body.dataset.theme = next;
     themeToggle.setAttribute("aria-pressed", next === "dark");
     localStorage.setItem("guitar-theme", next);
+    syncThemeColor();
   });
 
   /* ---------- Tuning selection ---------- */
@@ -704,4 +745,9 @@
 
   currentHintText = hintEl.textContent;
   renderStringChips();
+
+  // The app always opens on the library now (it's the shared hub for both
+  // instruments), not the tuner.
+  showPage("library");
+  syncThemeColor();
 })();

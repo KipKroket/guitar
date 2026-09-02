@@ -2,7 +2,10 @@
 // distinction (searching and opening a song is *not* the same as saving it
 // to the library -- only "Save" persists it).
 (function () {
-  const STORAGE_KEY = "guitar-library";
+  // One saved list per instrument -- guitar songs and piano songs never mix.
+  // Guitar keeps the original key so any songs saved before piano existed
+  // stay put.
+  const STORAGE_KEYS = { guitar: "guitar-library", piano: "piano-library" };
   const SEARCH_DEBOUNCE_MS = 550;
   // The iTunes endpoint occasionally drops a request (a brief rate-limit spike
   // returns a 403 with no CORS header, which the browser surfaces as a plain
@@ -31,15 +34,29 @@
   const detailSaveBtn = document.getElementById("detail-save-btn");
   const detailFavBtn = document.getElementById("detail-favorite-btn");
   const detailChordLinks = document.getElementById("detail-chord-links");
+  const detailChordSub = document.getElementById("chord-links-sub");
   const detailTabLinks = document.getElementById("detail-tab-links");
+  const detailTabGroup = document.getElementById("tab-links-group");
 
+  // Transparent background so the element's own `--surface-raised` shows
+  // through -- keeps the placeholder in step with whichever palette is
+  // active. Neutral grey glyph reads fine on both the warm and cool skins.
   const FALLBACK_ART =
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23E9D6AC'/%3E%3Cpath d='M35 65a8 8 0 1 1-8-8 8 8 0 0 1 8 8Zm0 0V32l30-6v31' fill='none' stroke='%23C9A96E' stroke-width='3'/%3E%3C/svg%3E";
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M35 65a8 8 0 1 1-8-8 8 8 0 0 1 8 8Zm0 0V32l30-6v31' fill='none' stroke='%23A6ABAF' stroke-width='3'/%3E%3C/svg%3E";
 
   /* ---------- Storage ---------- */
+  function currentInstrument() {
+    const get = window.GuitarApp && window.GuitarApp.getInstrument;
+    return (get && get()) || "guitar";
+  }
+
+  function storageKey() {
+    return STORAGE_KEYS[currentInstrument()] || STORAGE_KEYS.guitar;
+  }
+
   function loadLibrary() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(storageKey());
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
     } catch (err) {
@@ -48,7 +65,7 @@
   }
 
   function saveLibrary(list) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(storageKey(), JSON.stringify(list));
   }
 
   let library = loadLibrary();
@@ -249,15 +266,23 @@
   /* ---------- External chord / tab sources ---------- */
   // The app never stores or scrapes chord/tab content itself -- each button
   // just deep-links to a search on an external site with "<artist> <title>"
-  // pre-filled. Chords = lyrics with the chords to play written above them
-  // (strumming songs); Tabs = string-by-string tablature (fingerpicking,
-  // solos). Ultimate Guitar's `type[]` filter separates the two: 300 = Chords,
+  // pre-filled. Chord sources differ per instrument: guitar goes to the
+  // guitar tab/chord sites, piano goes to piano-oriented ones. Ultimate
+  // Guitar's `type[]` filter separates guitar formats: 300 = Chords,
   // 200 = Tab, 500 = Guitar Pro.
-  const CHORD_SOURCES = [
-    { name: "Ultimate Guitar", url: (q) => `https://www.ultimate-guitar.com/search.php?search_type=title&value=${q}&type[]=300` },
-    { name: "e-chords",        url: (q) => `https://www.e-chords.com/search-all/${q}` },
-    { name: "Chordify",        url: (q) => `https://chordify.net/search/${q}` },
-  ];
+  const CHORD_SOURCES = {
+    guitar: [
+      { name: "Ultimate Guitar", url: (q) => `https://www.ultimate-guitar.com/search.php?search_type=title&value=${q}&type[]=300` },
+      { name: "e-chords",        url: (q) => `https://www.e-chords.com/search-all/${q}` },
+      { name: "Chordify",        url: (q) => `https://chordify.net/search/${q}` },
+    ],
+    piano: [
+      { name: "Chordify",      url: (q) => `https://chordify.net/search/${q}` },
+      { name: "OnlinePianist", url: (q) => `https://www.onlinepianist.com/search?q=${q}` },
+      { name: "Musescore",     url: (q) => `https://musescore.com/sheetmusic?text=${q}` },
+    ],
+  };
+  // Guitar only -- piano mode hides the Tabs section entirely.
   const TAB_SOURCES = [
     { name: "Ultimate Guitar", url: (q) => `https://www.ultimate-guitar.com/search.php?search_type=title&value=${q}&type[]=200&type[]=500` },
     { name: "Songsterr",       url: (q) => `https://www.songsterr.com/?pattern=${q}` },
@@ -320,8 +345,19 @@
     detailMeta.textContent = [song.album, song.year].filter(Boolean).join(" · ");
 
     const linkQuery = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
-    renderSourceButtons(detailChordLinks, CHORD_SOURCES, linkQuery);
-    renderSourceButtons(detailTabLinks, TAB_SOURCES, linkQuery);
+    const piano = currentInstrument() === "piano";
+    renderSourceButtons(detailChordLinks, CHORD_SOURCES[piano ? "piano" : "guitar"], linkQuery);
+    if (detailChordSub) {
+      detailChordSub.textContent = piano
+        ? "Lyrics with the chords written above them — for playing along on the keys."
+        : "Lyrics with the chords to play above them — for strumming and campfire play.";
+    }
+    if (detailTabGroup) detailTabGroup.hidden = piano;
+    if (piano) {
+      detailTabLinks.innerHTML = "";
+    } else {
+      renderSourceButtons(detailTabLinks, TAB_SOURCES, linkQuery);
+    }
 
     updateSaveButton(saved);
     detailFavBtn.setAttribute("aria-pressed", currentDetailSong.favorite ? "true" : "false");
@@ -376,6 +412,16 @@
         closeDetail();
       }
     });
+  });
+
+  // Switching instrument (guitar <-> piano) means a different saved list and
+  // different chord sources, so reload from the other key and drop any open
+  // overlay (its song ids belong to the list we just left).
+  document.addEventListener("instrumentchange", () => {
+    closeSearch();
+    closeDetail();
+    library = loadLibrary();
+    renderLibraryList();
   });
 
   /* ---------- Init ---------- */

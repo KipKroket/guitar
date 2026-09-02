@@ -23,7 +23,7 @@
   <main id="page-container">
 
     <!-- TUNER -->
-    <section class="page" id="page-tuner" data-page="tuner">
+    <section class="page" id="page-tuner" data-page="tuner" hidden>
       <div class="tuner">
 
         <div class="tuner__mic-row">
@@ -108,13 +108,26 @@
     </section>
 
     <!-- LIBRARY -->
-    <section class="page" id="page-library" data-page="library" hidden>
+    <section class="page" id="page-library" data-page="library">
       <div class="library">
         <div class="library__header">
           <h1 class="library__title">Library</h1>
-          <button id="library-add-btn" class="add-button" type="button" aria-label="Add song">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          </button>
+          <div class="library__actions">
+            <button id="instrument-toggle" class="instrument-toggle" type="button" aria-label="Switch between guitar and piano">
+              <svg class="tog-icon tog-icon--guitar" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+              <svg class="tog-icon tog-icon--piano" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M8 5v9M12 5v9M16 5v9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button id="library-add-btn" class="add-button" type="button" aria-label="Add song">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
         </div>
 
         <div class="library__empty" id="library-empty" hidden>
@@ -157,10 +170,10 @@
           <div class="song-links">
             <div class="song-links__group">
               <h3 class="song-links__heading">Chords</h3>
-              <p class="song-links__sub">Lyrics with the chords to play above them — for strumming and campfire play.</p>
+              <p class="song-links__sub" id="chord-links-sub">Lyrics with the chords to play above them — for strumming and campfire play.</p>
               <div class="song-links__buttons" id="detail-chord-links"></div>
             </div>
-            <div class="song-links__group">
+            <div class="song-links__group" id="tab-links-group">
               <h3 class="song-links__heading">Tabs</h3>
               <p class="song-links__sub">String-by-string tablature — for fingerpicking parts and solos.</p>
               <div class="song-links__buttons" id="detail-tab-links"></div>
@@ -201,7 +214,7 @@
   </main>
 
   <nav class="bottom-nav" aria-label="Main">
-    <button class="nav-btn is-active" data-target="tuner" type="button">
+    <button class="nav-btn nav-btn--tuner" data-target="tuner" type="button">
       <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       <span>Tuner</span>
     </button>
@@ -209,7 +222,7 @@
       <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 8V5m-3 0h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 9 l4 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       <span>Metronome</span>
     </button>
-    <button class="nav-btn" data-target="library" type="button">
+    <button class="nav-btn is-active" data-target="library" type="button">
       <svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 4.5c2 -0.8 4.3 -0.8 6.5 0v15c-2.2 -0.8 -4.5 -0.8 -6.5 0Z M18.5 4.5c-2 -0.8 -4.3 -0.8 -6.5 0v15c2.2 -0.8 4.5 -0.8 6.5 0Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
       <span>Library</span>
     </button>
