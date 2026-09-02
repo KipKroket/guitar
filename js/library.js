@@ -159,14 +159,51 @@
 
   /* ---------- Search overlay ---------- */
   // Song metadata comes from the iTunes Search API: a free, keyless endpoint
-  // that -- unlike a raw MusicBrainz text query -- already ranks results by
-  // relevance and popularity, so "wonderwall" returns Oasis at the top instead
-  // of an obscure cover. It now sends `Access-Control-Allow-Origin: *`, so a
-  // plain browser fetch works (no JSONP or proxy needed), and artwork comes
-  // back in the same response, so there's no separate cover-art lookup.
-  // A single `term` matches across track, artist and album, so one search box
-  // covers "wonderwall", "oasis wonderwall" and "morning glory" alike.
+  // that already ranks results by relevance/popularity ("wonderwall" -> Oasis
+  // at the top) and returns artwork in the same response. A single `term`
+  // matches across track, artist and album.
+  //
+  // We load it via JSONP (its `&callback=` param), NOT fetch(): iOS Safari's
+  // Intelligent Tracking Prevention silently blocks cross-origin fetch() to
+  // itunes.apple.com on every network, even a fresh install -- which showed
+  // up as "Couldn't reach the music search". A <script> load isn't subject
+  // to that, so JSONP works where fetch doesn't.
   const ITUNES_SEARCH_URL = "https://itunes.apple.com/search";
+
+  // Load `${url}&callback=<fn>` as a <script>; resolves with the JSON object
+  // iTunes passes to that callback. Honours an AbortSignal and times out.
+  function itunesJsonp(url, signal) {
+    return new Promise((resolve, reject) => {
+      const cbName = "__itunesCb_" + Math.random().toString(36).slice(2);
+      const script = document.createElement("script");
+      let settled = false;
+
+      function cleanup() {
+        settled = true;
+        delete window[cbName];
+        script.remove();
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
+      }
+      function onAbort() {
+        if (settled) return;
+        cleanup();
+        reject(new DOMException("Aborted", "AbortError"));
+      }
+
+      window[cbName] = (data) => { if (settled) return; cleanup(); resolve(data); };
+      script.onerror = () => { if (settled) return; cleanup(); reject(new Error("Search request failed")); };
+      const timer = setTimeout(() => { if (settled) return; cleanup(); reject(new Error("Search timed out")); }, 10000);
+
+      if (signal) {
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener("abort", onAbort);
+      }
+
+      script.src = url + "&callback=" + cbName;
+      document.head.appendChild(script);
+    });
+  }
 
   let searchAbortController = null;
   let searchDebounceTimer = null;
@@ -266,9 +303,7 @@
     async function fetchResults() {
       for (let attempt = 0; ; attempt++) {
         try {
-          const res = await fetch(url, { signal });
-          if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-          return await res.json();
+          return await itunesJsonp(url, signal);
         } catch (err) {
           if (err.name === "AbortError" || attempt >= SEARCH_RETRIES) throw err;
           await new Promise((r) => setTimeout(r, SEARCH_RETRY_DELAY_MS));
