@@ -84,13 +84,16 @@ body {
 }
 
 .app {
+  /* Pinned to the viewport rect directly -- iOS standalone reports 100dvh
+     slightly short of the real screen, which left the bottom nav floating
+     above the edge with the page background showing under it. inset:0 +
+     margin:0 auto fills the height exactly and still centres at >480px. */
+  position: fixed;
+  inset: 0;
   max-width: 480px;
   margin: 0 auto;
-  height: 100vh;
-  height: 100dvh;
   display: flex;
   flex-direction: column;
-  position: relative;
   overflow: hidden;
 }
 
