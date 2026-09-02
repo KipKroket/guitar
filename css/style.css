@@ -468,27 +468,59 @@ select {
   gap: 0.6rem;
 }
 
-/* Secondary, outline style -- sits to the left of the filled + button and
-   shows the icon of whichever instrument is currently active. */
-.instrument-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  cursor: pointer;
+/* Segmented slider: guitar on the left, piano on the right, with a round
+   thumb that slides between them on tap (click only -- it never drags). */
+.instrument-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 66px;
+  height: 34px;
   flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  cursor: pointer;
 }
 
-.instrument-toggle:active { transform: translateY(1px); }
+.instrument-switch__icon {
+  position: absolute;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  transform: translateY(-50%);
+  display: flex;
+  color: var(--ink-soft);
+  transition: color 0.2s ease;
+  z-index: 1;
+}
 
-.instrument-toggle .tog-icon { display: none; }
-body[data-instrument="guitar"] .instrument-toggle .tog-icon--guitar { display: block; }
-body[data-instrument="piano"] .instrument-toggle .tog-icon--piano { display: block; }
+.instrument-switch__icon--guitar { left: 9px; }
+.instrument-switch__icon--piano { right: 9px; }
+
+.instrument-switch__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 1px 3px var(--shadow);
+  transition: transform 0.2s ease;
+  z-index: 0;
+}
+
+body[data-instrument="piano"] .instrument-switch__thumb { transform: translateX(33px); }
+
+/* Whichever icon the thumb sits under flips to the thumb's contrast colour;
+   the other stays muted. */
+body[data-instrument="guitar"] .instrument-switch__icon--guitar,
+body[data-instrument="piano"] .instrument-switch__icon--piano {
+  color: var(--bg);
+}
 
 .library__empty {
   margin-top: 3rem;
@@ -583,6 +615,82 @@ body[data-instrument="piano"] .instrument-toggle .tog-icon--piano { display: blo
   min-height: 1.2em;
   margin: 0 0 0.7rem;
 }
+
+/* ---------- Custom song (add one that isn't in the catalogue) ---------- */
+.custom-song { margin-bottom: 0.9rem; }
+
+.custom-song__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.55rem 0.2rem;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.custom-song__toggle[hidden] { display: none; }
+.custom-song__toggle svg { color: var(--ink-soft); flex-shrink: 0; }
+
+.custom-song__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.custom-song__form[hidden] { display: none; }
+
+.custom-song__input {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.8rem;
+}
+
+.custom-song__input::placeholder { color: var(--ink-soft); }
+
+.custom-song__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.1rem;
+}
+
+.custom-song__cancel {
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+}
+
+.custom-song__save {
+  border: none;
+  background: var(--amber);
+  color: var(--bg);
+  border-radius: 999px;
+  padding: 0.5rem 1.1rem;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.88rem;
+  box-shadow: 0 3px 0 var(--amber-deep);
+  cursor: pointer;
+}
+
+.custom-song__save:active { box-shadow: none; transform: translateY(3px); }
 
 /* ---------- Overlays (search / song detail) ---------- */
 .overlay {
@@ -713,6 +821,28 @@ body[data-instrument="piano"] .instrument-toggle .tog-icon--piano { display: blo
 
 .save-button:active { transform: translateY(1px); }
 
+/* "Open in metronome" -- only shown once a tempo has been found. */
+.detail-metro-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.55rem 1.2rem;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.detail-metro-btn[hidden] { display: none; }
+.detail-metro-btn:active { transform: translateY(1px); }
+.detail-metro-btn svg { color: var(--ink-soft); flex-shrink: 0; }
+.detail-metro-btn b { font-weight: 600; }
+
 .song-detail__note {
   margin-top: 1.6rem;
   font-size: 0.78rem;
@@ -729,6 +859,10 @@ body[data-instrument="piano"] .instrument-toggle .tog-icon--piano { display: blo
   gap: 1.7rem;
   text-align: left;
 }
+
+/* Author `display` beats the UA [hidden] rule -- spell out the hidden case
+   (custom songs have no links section at all). */
+.song-links[hidden] { display: none; }
 
 .song-links__group {
   display: flex;

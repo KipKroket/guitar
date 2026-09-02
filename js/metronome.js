@@ -196,11 +196,12 @@
     });
   });
 
-  /* ---------- Hook for the future song library: "Play with metronome" ----------
-     Library will call window.GuitarMetronome.playAtBpm(bpm[, signature]) to
-     jump here with the song's tempo already dialed in and running. */
+  /* ---------- Hook for the song library: "open in metronome" ----------
+     The library calls window.GuitarMetronome.playAtBpm(bpm[, signature[, opts]])
+     to jump here with a song's tempo already dialed in. Pass
+     { autostart: false } to land on the page without starting the click. */
   window.GuitarMetronome = {
-    playAtBpm(nextBpm, nextSignature) {
+    playAtBpm(nextBpm, nextSignature, { autostart = true } = {}) {
       if (nextSignature && SIGNATURES.includes(nextSignature)) {
         signature = nextSignature;
         signatureSelect.value = signature;
@@ -209,7 +210,7 @@
       }
       applyBpm(nextBpm);
       if (window.GuitarApp) window.GuitarApp.showPage("metronome");
-      if (!engine.isRunning()) start();
+      if (autostart && !engine.isRunning()) start();
     },
   };
 })();

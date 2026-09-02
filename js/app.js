@@ -55,6 +55,7 @@
   document.body.dataset.instrument = instrument;
 
   const instrumentToggle = document.getElementById("instrument-toggle");
+  if (instrumentToggle) instrumentToggle.setAttribute("aria-checked", instrument === "piano" ? "true" : "false");
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
   // Keep the mobile status-bar tint in step with whatever palette is active.
@@ -68,6 +69,7 @@
     if (!INSTRUMENTS.includes(next) || next === instrument) return;
     instrument = next;
     document.body.dataset.instrument = next;
+    if (instrumentToggle) instrumentToggle.setAttribute("aria-checked", next === "piano" ? "true" : "false");
     localStorage.setItem("guitar-instrument", next);
     // The tuner tab is guitar-only; if it's on screen when switching to
     // piano, step back to the library (where piano mode lives).

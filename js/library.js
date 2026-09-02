@@ -37,6 +37,15 @@
   const detailChordSub = document.getElementById("chord-links-sub");
   const detailTabLinks = document.getElementById("detail-tab-links");
   const detailTabGroup = document.getElementById("tab-links-group");
+  const songLinksEl = document.getElementById("song-links");
+  const detailMetronomeBtn = document.getElementById("detail-metronome-btn");
+  const detailBpmValue = document.getElementById("detail-bpm-value");
+
+  const customToggle = document.getElementById("custom-song-toggle");
+  const customForm = document.getElementById("custom-song-form");
+  const customTitleInput = document.getElementById("custom-song-title");
+  const customArtistInput = document.getElementById("custom-song-artist");
+  const customCancelBtn = document.getElementById("custom-song-cancel");
 
   // Transparent background so the element's own `--surface-raised` shows
   // through -- keeps the placeholder in step with whichever palette is
@@ -166,6 +175,7 @@
     searchResultsEl.innerHTML = "";
     searchStatusEl.textContent = "";
     searchInput.value = "";
+    resetCustomForm();
     setTimeout(() => searchInput.focus(), 50);
   }
 
@@ -173,6 +183,45 @@
     searchOverlay.hidden = true;
     if (searchAbortController) searchAbortController.abort();
   }
+
+  /* ---------- Custom song (not in the catalogue) ---------- */
+  function resetCustomForm() {
+    customForm.hidden = true;
+    customForm.reset();
+    customToggle.hidden = false;
+  }
+
+  customToggle.addEventListener("click", () => {
+    if (searchAbortController) searchAbortController.abort();
+    clearTimeout(searchDebounceTimer);
+    searchResultsEl.innerHTML = "";
+    searchStatusEl.textContent = "";
+    customToggle.hidden = true;
+    customForm.hidden = false;
+    setTimeout(() => customTitleInput.focus(), 30);
+  });
+
+  customCancelBtn.addEventListener("click", resetCustomForm);
+
+  customForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const title = customTitleInput.value.trim();
+    if (!title) return;
+    library.push({
+      id: `custom:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      title,
+      artist: customArtistInput.value.trim(),
+      album: "",
+      year: "",
+      artworkUrl: "",
+      custom: true,
+      favorite: false,
+      savedAt: Date.now(),
+    });
+    saveLibrary(library);
+    renderLibraryList();
+    closeSearch();
+  });
 
   // iTunes returns the same recording once per release it appears on (single,
   // album, deluxe reissue, live version...). Collapse those to the first --
@@ -247,6 +296,12 @@
   }
 
   searchInput.addEventListener("input", () => {
+    // Typing a search means they're done with the custom-song form -- fold it
+    // back up (without wiping what they'd typed there).
+    if (!customForm.hidden) {
+      customForm.hidden = true;
+      customToggle.hidden = false;
+    }
     const term = searchInput.value.trim();
     clearTimeout(searchDebounceTimer);
 
@@ -318,6 +373,36 @@
     });
   }
 
+  /* ---------- Tempo lookup (best effort) ---------- */
+  // The iTunes catalogue carries no tempo. TheAudioDB does (`intTempo`), is
+  // keyless (public test key "2"), and sends CORS headers, so a plain fetch
+  // works -- but it's only filled in for a subset of tracks. When it's
+  // missing or the request fails we just don't show a tempo.
+  const bpmCache = new Map();
+
+  async function fetchBpm(artist, title) {
+    const cacheKey = `${artist}␟${title}`.toLowerCase();
+    if (bpmCache.has(cacheKey)) return bpmCache.get(cacheKey);
+    let bpm = null;
+    try {
+      const s = encodeURIComponent((artist || "").trim());
+      const t = encodeURIComponent(cleanTitleForSearch(title || "").trim());
+      const res = await fetch(
+        `https://www.theaudiodb.com/api/v1/json/2/searchtrack.php?s=${s}&t=${t}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const track = data && data.track && data.track[0];
+        const value = track && parseInt(track.intTempo, 10);
+        if (Number.isFinite(value) && value >= 40 && value <= 260) bpm = value;
+      }
+    } catch (err) {
+      /* offline / blocked -- no tempo shown, no error surfaced */
+    }
+    bpmCache.set(cacheKey, bpm);
+    return bpm;
+  }
+
   /* ---------- Song detail overlay ---------- */
   // "Opening" a song (from search or from the library) just shows this page
   // -- it is NOT saved to the library until the Save button is tapped. If
@@ -325,6 +410,18 @@
   // favorite flag) is shown instead of a fresh transient copy.
   let currentDetailId = null;
   let currentDetailSong = null;
+  let detailSeq = 0;      // guards against a late BPM response landing on the wrong song
+  let detailBpm = null;
+
+  function setDetailMeta(bpm) {
+    const parts = [
+      currentDetailSong && currentDetailSong.album,
+      currentDetailSong && currentDetailSong.year,
+      bpm ? `${bpm} BPM` : null,
+    ].filter(Boolean);
+    detailMeta.textContent = parts.join(" · ");
+    detailMeta.hidden = parts.length === 0;
+  }
 
   function updateSaveButton(isSaved) {
     detailSaveBtn.classList.toggle("is-saved", isSaved);
@@ -337,26 +434,36 @@
     const saved = Boolean(existing);
     currentDetailId = song.id;
     currentDetailSong = existing || { ...song, favorite: false };
+    const custom = Boolean(currentDetailSong.custom);
+    const mySeq = ++detailSeq;
+    detailBpm = null;
+    detailMetronomeBtn.hidden = true;
 
     detailArt.src = song.artworkUrl || FALLBACK_ART;
     detailArt.onerror = () => { detailArt.onerror = null; detailArt.src = FALLBACK_ART; };
     detailTitle.textContent = song.title;
-    detailArtist.textContent = song.artist;
-    detailMeta.textContent = [song.album, song.year].filter(Boolean).join(" · ");
+    detailArtist.textContent = song.artist || "";
+    detailArtist.hidden = !song.artist;
+    setDetailMeta(null);
 
-    const linkQuery = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
-    const piano = currentInstrument() === "piano";
-    renderSourceButtons(detailChordLinks, CHORD_SOURCES[piano ? "piano" : "guitar"], linkQuery);
-    if (detailChordSub) {
-      detailChordSub.textContent = piano
-        ? "Lyrics with the chords written above them — for playing along on the keys."
-        : "Lyrics with the chords to play above them — for strumming and campfire play.";
-    }
-    if (detailTabGroup) detailTabGroup.hidden = piano;
-    if (piano) {
-      detailTabLinks.innerHTML = "";
-    } else {
-      renderSourceButtons(detailTabLinks, TAB_SOURCES, linkQuery);
+    // Custom songs have no external chord/tab pages and no catalogue tempo --
+    // the detail view is then just art + title + save/remove.
+    songLinksEl.hidden = custom;
+    if (!custom) {
+      const linkQuery = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
+      const piano = currentInstrument() === "piano";
+      renderSourceButtons(detailChordLinks, CHORD_SOURCES[piano ? "piano" : "guitar"], linkQuery);
+      if (detailChordSub) {
+        detailChordSub.textContent = piano
+          ? "Lyrics with the chords written above them — for playing along on the keys."
+          : "Lyrics with the chords to play above them — for strumming and campfire play.";
+      }
+      if (detailTabGroup) detailTabGroup.hidden = piano;
+      if (piano) {
+        detailTabLinks.innerHTML = "";
+      } else {
+        renderSourceButtons(detailTabLinks, TAB_SOURCES, linkQuery);
+      }
     }
 
     updateSaveButton(saved);
@@ -364,13 +471,34 @@
 
     detailOverlay.hidden = false;
     closeSearch();
+
+    // Best-effort tempo: if TheAudioDB knows it, show it beside the year and
+    // reveal the "open in metronome" button.
+    if (!custom) {
+      fetchBpm(currentDetailSong.artist, currentDetailSong.title).then((bpm) => {
+        if (mySeq !== detailSeq || detailOverlay.hidden || !bpm) return;
+        detailBpm = bpm;
+        detailBpmValue.textContent = String(bpm);
+        setDetailMeta(bpm);
+        detailMetronomeBtn.hidden = false;
+      });
+    }
   }
 
   function closeDetail() {
     detailOverlay.hidden = true;
     currentDetailId = null;
     currentDetailSong = null;
+    detailBpm = null;
+    detailSeq++; // invalidate any in-flight tempo lookup
   }
+
+  detailMetronomeBtn.addEventListener("click", () => {
+    if (!detailBpm || !window.GuitarMetronome) return;
+    const bpm = detailBpm;
+    closeDetail();
+    window.GuitarMetronome.playAtBpm(bpm, null, { autostart: false });
+  });
 
   detailBackBtn.addEventListener("click", closeDetail);
 
