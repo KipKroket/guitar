@@ -71,25 +71,27 @@ html, body {
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* Nav-coloured, not page-coloured: if iOS ever leaves a sliver below the
+     shell (safe-area rounding), it matches the bottom bar instead of
+     flashing the lighter page background. #page-container paints the real
+     page colour over the top. */
+  background: var(--surface);
   color: var(--ink);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   transition: background 0.25s ease, color 0.25s ease;
-  /* The app is a fixed shell -- only #page-container scrolls. Stops iOS
-     standalone from rubber-banding the whole page (which made the fixed
-     nav drift and left a strip of bare background below it). */
+  /* Only #page-container scrolls -- stops iOS standalone from rubber-banding
+     the whole page. */
   overflow: hidden;
   overscroll-behavior: none;
 }
 
 .app {
-  /* Pinned to the viewport rect directly -- iOS standalone reports 100dvh
-     slightly short of the real screen, which left the bottom nav floating
-     above the edge with the page background showing under it. inset:0 +
-     margin:0 auto fills the height exactly and still centres at >480px. */
-  position: fixed;
-  inset: 0;
+  /* Percentage height chained from html -> body (both height:100%) tracks
+     the real screen in iOS standalone, where 100vh/100dvh and even
+     position:fixed;inset:0 came up short and left the nav floating above
+     the edge. */
+  height: 100%;
   max-width: 480px;
   margin: 0 auto;
   display: flex;
@@ -104,6 +106,7 @@ body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
+  background: var(--bg);
   /* top inset keeps the header clear of the status bar / notch */
   padding: calc(1.4rem + env(safe-area-inset-top)) 1.25rem 1.6rem;
 }
