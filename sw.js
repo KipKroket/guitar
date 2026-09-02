@@ -3,7 +3,7 @@
 // Song search (iTunes API) and the external chord/tab links still need a
 // connection; everything else — tuner, metronome, saved library — works offline.
 
-const CACHE = "guitar-v6";
+const CACHE = "guitar-v7";
 
 const SHELL = [
   "./",
@@ -29,8 +29,14 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  // `cache: "reload"` makes each precache fetch bypass the browser HTTP cache,
+  // so a worker update always stores genuinely fresh files -- otherwise an
+  // update can bake in stale copies and the new version only appears a
+  // relaunch or two later.
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((cache) => cache.addAll(SHELL.map((url) => new Request(url, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
   );
 });
 
