@@ -76,22 +76,33 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   transition: background 0.25s ease, color 0.25s ease;
+  /* The app is a fixed shell -- only #page-container scrolls. Stops iOS
+     standalone from rubber-banding the whole page (which made the fixed
+     nav drift and left a strip of bare background below it). */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .app {
   max-width: 480px;
   margin: 0 auto;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
 }
 
 /* ---------- Pages ---------- */
 #page-container {
   flex: 1;
-  padding: 1.5rem 1.25rem 6.5rem;
+  min-height: 0; /* let the flex child actually shrink so it, not the body, scrolls */
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  /* top inset keeps the header clear of the status bar / notch */
+  padding: calc(1.4rem + env(safe-area-inset-top)) 1.25rem 1.6rem;
 }
 
 .page[hidden] { display: none; }
@@ -104,13 +115,11 @@ body {
 }
 
 /* ---------- Bottom nav ---------- */
+/* A non-scrolling flex child at the bottom of the shell -- not position:
+   fixed, so iOS overscroll can't peel it away from the edge. */
 .bottom-nav {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 0;
+  flex-shrink: 0;
   width: 100%;
-  max-width: 480px;
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--line);
