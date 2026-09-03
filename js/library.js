@@ -158,23 +158,53 @@
   }
 
   /* ---------- Search overlay ---------- */
-  // Song metadata comes from the iTunes Search API: a free, keyless endpoint
-  // that already ranks results by relevance/popularity ("wonderwall" -> Oasis
-  // at the top) and returns artwork in the same response. A single `term`
-  // matches across track, artist and album.
+  // Song metadata comes from a music catalogue API: keyless, ranked by
+  // popularity ("wonderwall" -> Oasis at the top), with artwork in the same
+  // response, and one query that matches track / artist / album alike.
   //
-  // We load it via JSONP (its `&callback=` param), NOT fetch(): iOS Safari's
-  // Intelligent Tracking Prevention silently blocks cross-origin fetch() to
-  // itunes.apple.com on every network, even a fresh install -- which showed
-  // up as "Couldn't reach the music search". A <script> load isn't subject
-  // to that, so JSONP works where fetch doesn't.
-  const ITUNES_SEARCH_URL = "https://itunes.apple.com/search";
+  // It is loaded as a <script> (JSONP), never fetch(): on iOS Safari a
+  // cross-origin fetch() to these catalogues fails (ITP / missing CORS
+  // headers), which is what surfaced as "Couldn't reach the music search".
+  // A <script> load isn't subject to that.
+  //
+  // The primary catalogue is Deezer, NOT the iTunes Search API. iTunes'
+  // JSONP response carries `Content-Disposition: attachment`, and WebKit
+  // (i.e. every browser on iOS) then refuses to run the script -- so iTunes
+  // JSONP works in a desktop preview but never on the phone. Deezer's JSONP
+  // has no such header. iTunes is kept as a fallback for non-Safari clients
+  // and in case Deezer is unreachable.
+  const SEARCH_SOURCES = [
+    {
+      name: "Deezer",
+      url: (term) =>
+        "https://api.deezer.com/search?output=jsonp&limit=25&q=" + encodeURIComponent(term),
+      // Deezer wraps the payload as `<cb>({ data: [ {track}, ... ] })`.
+      toSongs: (data) =>
+        (data && Array.isArray(data.data) ? data.data : []).map((r) => ({
+          id: `deezer:${r.id}`,
+          title: r.title || r.title_short || "Untitled",
+          artist: (r.artist && r.artist.name) || "Unknown artist",
+          album: (r.album && r.album.title) || "",
+          year: "", // Deezer search rows carry no release date
+          artworkUrl:
+            (r.album && (r.album.cover_big || r.album.cover_medium || r.album.cover)) || "",
+        })),
+    },
+    {
+      name: "iTunes",
+      url: (term) =>
+        "https://itunes.apple.com/search?media=music&entity=song&limit=25&term=" +
+        encodeURIComponent(term),
+      toSongs: (data) =>
+        (data && Array.isArray(data.results) ? data.results : []).map(itunesResultToSong),
+    },
+  ];
 
   // Load `${url}&callback=<fn>` as a <script>; resolves with the JSON object
-  // iTunes passes to that callback. Honours an AbortSignal and times out.
-  function itunesJsonp(url, signal) {
+  // the API passes to that callback. Honours an AbortSignal and times out.
+  function loadJsonp(url, signal) {
     return new Promise((resolve, reject) => {
-      const cbName = "__itunesCb_" + Math.random().toString(36).slice(2);
+      const cbName = "__searchCb_" + Math.random().toString(36).slice(2);
       const script = document.createElement("script");
       let settled = false;
 
@@ -296,25 +326,33 @@
     searchStatusEl.textContent = "Searching…";
     searchResultsEl.innerHTML = "";
 
-    const url =
-      `${ITUNES_SEARCH_URL}?media=music&entity=song&limit=25&term=${encodeURIComponent(term)}`;
     const signal = searchAbortController.signal;
 
-    async function fetchResults() {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await itunesJsonp(url, signal);
-        } catch (err) {
-          if (err.name === "AbortError" || attempt >= SEARCH_RETRIES) throw err;
-          await new Promise((r) => setTimeout(r, SEARCH_RETRY_DELAY_MS));
-          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    // Try each catalogue in turn (Deezer, then iTunes), with one quiet retry
+    // apiece -- these endpoints occasionally drop a single request. The error
+    // message only shows if every source fails.
+    async function fetchSongs() {
+      let lastErr = null;
+      for (const source of SEARCH_SOURCES) {
+        for (let attempt = 0; attempt <= SEARCH_RETRIES; attempt++) {
+          try {
+            const data = await loadJsonp(source.url(term), signal);
+            return source.toSongs(data);
+          } catch (err) {
+            if (err.name === "AbortError") throw err;
+            lastErr = err;
+            if (attempt < SEARCH_RETRIES) {
+              await new Promise((r) => setTimeout(r, SEARCH_RETRY_DELAY_MS));
+              if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+            }
+          }
         }
       }
+      throw lastErr || new Error("Search failed");
     }
 
     try {
-      const data = await fetchResults();
-      const results = dedupeByTrack((data.results || []).map(itunesResultToSong));
+      const results = dedupeByTrack(await fetchSongs());
 
       if (results.length === 0) {
         searchStatusEl.textContent = "No songs found.";

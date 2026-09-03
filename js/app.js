@@ -102,6 +102,16 @@
     syncThemeColor();
   });
 
+  /* ---------- Build number ---------- */
+  // Shown small at the bottom of Settings so it's possible to tell at a glance
+  // which bundle a device is actually running (a PWA can sit on a stale
+  // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
+  // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
+  // together so this number identifies the exact shipped code.
+  const BUILD = "11";
+  const versionEl = document.getElementById("app-version");
+  if (versionEl) versionEl.textContent = "Build " + BUILD;
+
   /* ---------- Tuning selection ---------- */
   const tuningSelect = document.getElementById("tuning-select");
   const defaultTuningSelect = document.getElementById("default-tuning-select");

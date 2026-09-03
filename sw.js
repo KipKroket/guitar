@@ -3,7 +3,9 @@
 // Song search (iTunes API) and the external chord/tab links still need a
 // connection; everything else — tuner, metronome, saved library — works offline.
 
-const CACHE = "guitar-v10";
+// Bump on every deploy, in lockstep with BUILD in js/app.js -- the two always
+// move together, so the number shown in Settings identifies this exact cache.
+const CACHE = "guitar-v11";
 
 const SHELL = [
   "./",

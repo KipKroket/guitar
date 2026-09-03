@@ -975,6 +975,15 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .settings-row__title { font-size: 0.95rem; }
 .settings-row__desc { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.15rem; }
 
+.settings-version {
+  margin: 1.1rem 1rem 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  opacity: 0.75;
+  text-align: center;
+}
+
 .theme-toggle {
   appearance: none;
   -webkit-appearance: none;
