@@ -2,7 +2,7 @@
   const { GuitarTuner, TUNINGS, freqToNote } = window.GuitarTunerEngine;
 
   const CONFIRM_CENTS = 5;      // how close counts as "in tune"
-  const CONFIRM_HOLD_MS = 600;  // how long it must stay in tune before confirming
+  const CONFIRM_HOLD_MS = 500;  // how long it must stay in tune before confirming
   const ADVANCE_DELAY_MS = 700; // pause after confirmation before moving on
 
   const SIGNAL_GRACE_MS = 2500;    // brief dropouts (breath, pick noise, or a plucked string simply
@@ -15,9 +15,14 @@
                                     // in-tune hold keeps accumulating silently during this grace window.
   const HOLD_GRACE_MS = 400;       // a stray out-of-tune reading doesn't cancel an in-tune hold
   const CENTS_SMOOTHING = 0.25;    // needle/reading smoothing factor (0-1, lower = calmer)
-  const HOLD_SMOOTHING = 0.08;     // separate, slower filter that decides "in tune" for confirming --
-                                    // deliberately calmer than the needle so a stray octave-error or
-                                    // noise spike from the pitch detector can't stall the auto-advance
+  const HOLD_SMOOTHING = 0.2;      // separate, calmer filter that decides "in tune" for confirming --
+                                    // steadier than the needle so a stray noise spike can't stall the
+                                    // auto-advance. Was 0.08, which (paired with the old detector's
+                                    // sharp low-string bias) was so sluggish a correctly tuned string
+                                    // could take many seconds to confirm, or never cross the line at
+                                    // all. The detector no longer has that bias and the 150-cent
+                                    // outlier gate below still swallows true octave slips, so this can
+                                    // track real pitch changes far more promptly.
   const HOLD_OUTLIER_GATE_CENTS = 150; // a single reading this far from the current hold estimate is
                                         // almost certainly a bad detection (octave slip); ignore it
   const HOLD_OUTLIER_RESEED_FRAMES = 15; // ~0.25s of consecutive rejections means the *hold* value
@@ -108,7 +113,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "13";
+  const BUILD = "14";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 
@@ -135,15 +140,18 @@
   /* ---------- Reference tone: real recording first, synthesis as fallback ---------- */
   let toneCtx = null;
 
-  // Real acoustic guitar open-string recordings (University of Iowa Electronic
-  // Music Studios -- freely usable for any purpose, no restrictions), bundled
-  // locally with the app instead of fetched from their server. Two reasons:
-  // (1) that server sends no CORS headers, so fetching it cross-origin from a
-  // real deploy fails outright with a generic network error; (2) depending on
-  // a third party's uptime/speed for a core sound in the app isn't reliable.
-  // Each file here is already trimmed to just the open-string pluck (each
-  // original was a multi-second chromatic run) and loudness-normalized, both
-  // done once up front -- the app no longer needs to do either at runtime.
+  // Real acoustic guitar open-string recordings (Philharmonia Orchestra sound
+  // sample library -- free to download and use), bundled locally with the app.
+  // One consistent source: same guitar, same player, same room and mic, so the
+  // six tones sit together as a set. Each file has been prepared once, up front,
+  // so the app does nothing to them at runtime:
+  //   - trimmed to the open-string pluck plus ~1.4-1.8 s of natural decay
+  //   - pitch-corrected to exact concert pitch (the recorded guitar was a few
+  //     cents off here and there); every file is now within ~1 cent of target
+  //   - loudness-matched across the set, with a short fade in/out
+  // (An earlier set from a different library had a broken A2 whose fundamental
+  //  died almost immediately, leaving a wavering octave overtone -- that is why
+  //  the whole set was replaced rather than patched.)
   const REAL_SAMPLES = {
     E2: "audio/E2.mp3",
     A2: "audio/A2.mp3",
