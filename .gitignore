@@ -1,1 +1,6 @@
 .DS_Store
+
+# Cloudflare Worker tooling (server/)
+node_modules/
+.wrangler/
+server/.dev.vars

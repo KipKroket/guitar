@@ -239,6 +239,47 @@
             <option value="halfStepDown">Half Step Down</option>
           </select>
         </div>
+
+        <!-- Account & cloud sync (only shown when a sync server is configured
+             in js/sync.js) -->
+        <div class="settings-row settings-row--stack" id="account-group" hidden>
+          <div>
+            <div class="settings-row__title">Account &amp; sync</div>
+            <div class="settings-row__desc">Keep your library backed up in the cloud. No email — just a username and a 6-digit passcode.</div>
+          </div>
+
+          <div id="account-signed-out">
+            <div class="stack-fields">
+              <input id="account-username" class="custom-song__input" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="20">
+              <input id="account-passcode" class="custom-song__input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit passcode" autocomplete="off" maxlength="6">
+            </div>
+            <div class="stack-actions">
+              <button id="account-login-btn" class="custom-song__save" type="button">Sign in</button>
+              <button id="account-register-btn" class="custom-song__cancel" type="button">Create account</button>
+            </div>
+            <p class="settings-note" id="account-status"></p>
+          </div>
+
+          <div id="account-signed-in" hidden>
+            <p class="settings-note">Signed in as <b id="account-who"></b></p>
+            <p class="settings-note" id="account-sync-status"></p>
+            <button id="account-logout-btn" class="custom-song__cancel" type="button">Sign out</button>
+          </div>
+        </div>
+
+        <!-- Manual backup: always available, independent of the cloud sync -->
+        <div class="settings-row settings-row--stack">
+          <div>
+            <div class="settings-row__title">Back-up file</div>
+            <div class="settings-row__desc">Save your whole library (both instruments) to a file, or merge one back in. Importing never deletes what you already have.</div>
+          </div>
+          <div class="stack-actions">
+            <button id="export-btn" class="custom-song__save" type="button">Export</button>
+            <button id="import-btn" class="custom-song__cancel" type="button">Import</button>
+            <input id="import-file" type="file" accept="application/json,.json" hidden>
+          </div>
+          <p class="settings-note" id="backup-status"></p>
+        </div>
       </div>
       <p class="settings-version" id="app-version"></p>
     </section>
@@ -271,6 +312,7 @@
 <script src="js/app.js"></script>
 <script src="js/metronome.js"></script>
 <script src="js/library.js"></script>
+<script src="js/sync.js"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {

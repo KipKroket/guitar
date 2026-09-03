@@ -1,0 +1,10 @@
+name = "guitar-sync"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+# Fill database_id in after `wrangler d1 create guitar-sync` (step 3 in README).
+[[d1_databases]]
+binding = "DB"
+database_name = "guitar-sync"
+database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"

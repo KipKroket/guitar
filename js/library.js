@@ -4,8 +4,17 @@
 (function () {
   // One saved list per instrument -- guitar songs and piano songs never mix.
   // Guitar keeps the original key so any songs saved before piano existed
-  // stay put.
+  // stay put. Alongside each list is a "tombstone" list: ids of songs the
+  // user deleted, each with a timestamp. Every song row also carries an
+  // `updatedAt`. That pair -- per-row timestamps + tombstones -- is what
+  // lets two copies of a library (a backup file, or the cloud copy) be
+  // *merged* instead of one clobbering the other. See mergeSnapshots().
   const STORAGE_KEYS = { guitar: "guitar-library", piano: "piano-library" };
+  const TOMB_KEYS = { guitar: "guitar-library-tomb", piano: "piano-library-tomb" };
+  const INSTRUMENTS = ["guitar", "piano"];
+  // A deletion older than this has long since reached every device; drop it
+  // so the tombstone list can't grow without bound.
+  const TOMB_TTL_MS = 150 * 24 * 60 * 60 * 1000;
   const SEARCH_DEBOUNCE_MS = 550;
   // The iTunes endpoint occasionally drops a request (a brief rate-limit spike
   // returns a 403 with no CORS header, which the browser surfaces as a plain
@@ -60,28 +69,55 @@
     return (get && get()) || "guitar";
   }
 
-  function storageKey() {
-    return STORAGE_KEYS[currentInstrument()] || STORAGE_KEYS.guitar;
-  }
-
-  function loadLibrary() {
+  function readList(key) {
     try {
-      const raw = localStorage.getItem(storageKey());
-      const parsed = raw ? JSON.parse(raw) : [];
+      const parsed = JSON.parse(localStorage.getItem(key) || "[]");
       return Array.isArray(parsed) ? parsed : [];
     } catch (err) {
       return [];
     }
   }
-
-  function saveLibrary(list) {
-    localStorage.setItem(storageKey(), JSON.stringify(list));
+  function writeList(key, list) {
+    localStorage.setItem(key, JSON.stringify(list));
   }
 
-  let library = loadLibrary();
+  // Songs saved before this change have no `updatedAt` -- seed it from
+  // `savedAt` (or a low non-zero value) so every row can take part in a merge.
+  function normalizeSongs(list) {
+    return list.map((s) => (s && s.updatedAt ? s : { ...s, updatedAt: (s && s.savedAt) || 1 }));
+  }
+
+  function loadSongs(inst) {
+    return normalizeSongs(readList(STORAGE_KEYS[inst]));
+  }
+  function loadTombs(inst) {
+    return readList(TOMB_KEYS[inst]).filter((t) => t && t.id);
+  }
+  function persist(inst, songs, tombs) {
+    writeList(STORAGE_KEYS[inst], songs);
+    if (tombs) writeList(TOMB_KEYS[inst], tombs);
+  }
+
+  let library = loadSongs(currentInstrument());
+  let tombstones = loadTombs(currentInstrument());
+
+  // Persist the active instrument's state and let the (optional) cloud-sync
+  // layer know something changed.
+  function commit() {
+    persist(currentInstrument(), library, tombstones);
+    document.dispatchEvent(new CustomEvent("librarychange"));
+  }
 
   function findEntry(id) {
     return library.find((s) => s.id === id) || null;
+  }
+
+  function dropTomb(id) {
+    tombstones = tombstones.filter((t) => t.id !== id);
+  }
+  function addTomb(id) {
+    dropTomb(id);
+    tombstones.push({ id, deletedAt: Date.now() });
   }
 
   function sortedLibrary() {
@@ -150,7 +186,8 @@
     const entry = findEntry(id);
     if (!entry) return;
     entry.favorite = !entry.favorite;
-    saveLibrary(library);
+    entry.updatedAt = Date.now();
+    commit();
     renderLibraryList();
     if (currentDetailId === id) {
       detailFavBtn.setAttribute("aria-pressed", entry.favorite ? "true" : "false");
@@ -275,8 +312,11 @@
     e.preventDefault();
     const title = customTitleInput.value.trim();
     if (!title) return;
+    const now = Date.now();
+    const id = `custom:${now}:${Math.random().toString(36).slice(2, 8)}`;
+    dropTomb(id);
     library.push({
-      id: `custom:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      id,
       title,
       artist: customArtistInput.value.trim(),
       album: "",
@@ -284,9 +324,10 @@
       artworkUrl: "",
       custom: true,
       favorite: false,
-      savedAt: Date.now(),
+      savedAt: now,
+      updatedAt: now,
     });
-    saveLibrary(library);
+    commit();
     renderLibraryList();
     closeSearch();
   });
@@ -588,17 +629,21 @@
     const existing = findEntry(currentDetailId);
 
     if (existing) {
-      // Remove from library.
+      // Remove from library -- and record the deletion so a merge with an
+      // older copy (backup file / another device) doesn't resurrect it.
+      addTomb(currentDetailId);
       library = library.filter((s) => s.id !== currentDetailId);
-      saveLibrary(library);
+      commit();
       currentDetailSong = { ...currentDetailSong, favorite: false };
       updateSaveButton(false);
       detailFavBtn.setAttribute("aria-pressed", "false");
     } else {
       // Save to library.
-      const entry = { ...currentDetailSong, favorite: false, savedAt: Date.now() };
+      const now = Date.now();
+      dropTomb(currentDetailId);
+      const entry = { ...currentDetailSong, favorite: false, savedAt: now, updatedAt: now };
       library.push(entry);
-      saveLibrary(library);
+      commit();
       currentDetailSong = entry;
       updateSaveButton(true);
     }
@@ -629,9 +674,179 @@
   document.addEventListener("instrumentchange", () => {
     closeSearch();
     closeDetail();
-    library = loadLibrary();
+    library = loadSongs(currentInstrument());
+    tombstones = loadTombs(currentInstrument());
     renderLibraryList();
   });
+
+  /* ---------- Merge, snapshots, backup ---------- */
+  // Pure: fold two {songs, tombstones} snapshots of ONE instrument into one.
+  // Union by song id; when an id is on both sides the row with the newer
+  // `updatedAt` wins. A tombstone removes a song only when the deletion is
+  // at least as new as that row -- so re-adding a song after deleting it on
+  // another device sticks. Tombstones past their TTL, or for a song that was
+  // re-added more recently, are dropped.
+  //
+  // NOTE: the Cloudflare Worker in /server runs an identical merge; keep the
+  // two in step if this changes.
+  function mergeSnapshots(a, b) {
+    const now = Date.now();
+
+    const tombs = new Map();
+    [].concat(a.tombstones || [], b.tombstones || []).forEach((t) => {
+      if (!t || !t.id) return;
+      const prev = tombs.get(t.id);
+      if (!prev || (t.deletedAt || 0) > (prev.deletedAt || 0)) {
+        tombs.set(t.id, { id: t.id, deletedAt: t.deletedAt || 0 });
+      }
+    });
+
+    const rows = new Map();
+    [].concat(a.songs || [], b.songs || []).forEach((s) => {
+      if (!s || !s.id) return;
+      const prev = rows.get(s.id);
+      if (!prev || (s.updatedAt || 0) >= (prev.updatedAt || 0)) rows.set(s.id, s);
+    });
+
+    const songs = [];
+    rows.forEach((s, id) => {
+      const t = tombs.get(id);
+      if (t && (t.deletedAt || 0) >= (s.updatedAt || 0)) return; // stays deleted
+      songs.push(s);
+    });
+
+    const keptTombs = [];
+    tombs.forEach((t, id) => {
+      if (now - (t.deletedAt || 0) > TOMB_TTL_MS) return;
+      const s = rows.get(id);
+      if (s && (s.updatedAt || 0) > (t.deletedAt || 0)) return; // re-added since
+      keptTombs.push(t);
+    });
+
+    return { songs: songs, tombstones: keptTombs };
+  }
+
+  function snapshotOf(inst) {
+    return { songs: loadSongs(inst), tombstones: loadTombs(inst) };
+  }
+
+  // The whole app's library state, both instruments -- what a backup file
+  // holds and what the cloud sync sends up.
+  function getAllSnapshot() {
+    const out = {};
+    INSTRUMENTS.forEach((inst) => (out[inst] = snapshotOf(inst)));
+    return out;
+  }
+
+  // Merge an incoming {guitar:{songs,tombstones}, piano:{...}} into local
+  // storage. Returns the merged result and re-renders the visible list.
+  function applySnapshot(incoming) {
+    if (!incoming || typeof incoming !== "object") return getAllSnapshot();
+    const merged = {};
+    INSTRUMENTS.forEach((inst) => {
+      const inSnap = incoming[inst];
+      merged[inst] = inSnap
+        ? mergeSnapshots(snapshotOf(inst), {
+            songs: normalizeSongs(Array.isArray(inSnap.songs) ? inSnap.songs : []),
+            tombstones: Array.isArray(inSnap.tombstones) ? inSnap.tombstones : [],
+          })
+        : snapshotOf(inst);
+      persist(inst, merged[inst].songs, merged[inst].tombstones);
+    });
+    const cur = currentInstrument();
+    library = loadSongs(cur);
+    tombstones = loadTombs(cur);
+    renderLibraryList();
+    return merged;
+  }
+
+  function exportData() {
+    return JSON.stringify(
+      { app: "guitar", format: 1, exportedAt: Date.now(), libraries: getAllSnapshot() },
+      null,
+      2
+    );
+  }
+
+  // Takes the parsed contents of a backup file and merges it in. Throws if
+  // it isn't a Guitar backup.
+  function importData(obj) {
+    if (!obj || obj.app !== "guitar" || !obj.libraries || typeof obj.libraries !== "object") {
+      throw new Error("Not a Guitar backup file.");
+    }
+    return applySnapshot(obj.libraries);
+  }
+
+  function countSongs(snap) {
+    return INSTRUMENTS.reduce(
+      (n, inst) => n + ((snap[inst] && snap[inst].songs.length) || 0),
+      0
+    );
+  }
+
+  // Exposed for js/sync.js (optional cloud sync).
+  window.GuitarLibrary = { getAllSnapshot, applySnapshot };
+
+  /* ---------- Backup buttons (Settings) ---------- */
+  const exportBtn = document.getElementById("export-btn");
+  const importBtn = document.getElementById("import-btn");
+  const importFile = document.getElementById("import-file");
+  const backupStatus = document.getElementById("backup-status");
+
+  function setBackupStatus(msg, isError) {
+    if (!backupStatus) return;
+    backupStatus.textContent = msg || "";
+    backupStatus.classList.toggle("is-error", Boolean(isError));
+  }
+
+  if (exportBtn) {
+    exportBtn.addEventListener("click", () => {
+      try {
+        const date = new Date().toISOString().slice(0, 10);
+        const blob = new Blob([exportData()], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `guitar-library-${date}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        setBackupStatus(`Saved guitar-library-${date}.json`);
+      } catch (err) {
+        setBackupStatus("Couldn't export: " + err.message, true);
+      }
+    });
+  }
+
+  if (importBtn && importFile) {
+    importBtn.addEventListener("click", () => importFile.click());
+    importFile.addEventListener("change", () => {
+      const file = importFile.files && importFile.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const before = countSongs(getAllSnapshot());
+          importData(JSON.parse(reader.result));
+          const added = countSongs(getAllSnapshot()) - before;
+          setBackupStatus(
+            added > 0
+              ? `Merged in — ${added} new song${added === 1 ? "" : "s"}.`
+              : "Merged in — nothing new to add."
+          );
+        } catch (err) {
+          setBackupStatus("Couldn't import: " + err.message, true);
+        }
+        importFile.value = "";
+      };
+      reader.onerror = () => {
+        setBackupStatus("Couldn't read that file.", true);
+        importFile.value = "";
+      };
+      reader.readAsText(file);
+    });
+  }
 
   /* ---------- Init ---------- */
   renderLibraryList();
