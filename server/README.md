@@ -5,6 +5,21 @@ all on Cloudflare's **free** plan (100k requests/day, no credit card, never
 sleeps). Users sign in with a username + 6-digit passcode; their library is
 merged with a server copy so no device overwrites another.
 
+## Already deployed (2026-09-03)
+
+- Worker: **https://guitar-sync.julianleendertse.workers.dev** (this is the
+  value of `SYNC_URL` in `../js/sync.js`)
+- D1 database `guitar-sync`, id `4bde485e-a1fa-4ee3-ae78-99f478fd299b`
+- Account `7251c5e4dde742756b7a88fbb40d4526` (KipKroket, GitHub login)
+- Schema from `schema.sql` applied; deployed via the dashboard (Workers →
+  Edit code) because this Mac has no Node/wrangler.
+
+To ship a code change without wrangler: Cloudflare dashboard → Workers &
+Pages → guitar-sync → Edit code → paste `src/worker.js` → Deploy. The D1
+binding (`DB`) and the schema persist across code deploys. The steps below
+are the from-scratch path (e.g. redeploying on another machine that has
+Node).
+
 ## What you need once
 
 - A free Cloudflare account — sign up at <https://dash.cloudflare.com/sign-up>

@@ -14,7 +14,7 @@
 // stays hidden -- the app is exactly as it was, backup/restore via the
 // export/import buttons only.
 (function () {
-  const SYNC_URL = ""; // e.g. "https://guitar-sync.yourname.workers.dev"
+  const SYNC_URL = "https://guitar-sync.julianleendertse.workers.dev";
 
   const ACCOUNT_KEY = "guitar-account"; // { username, token }
   const SYNC_DEBOUNCE_MS = 2500;
