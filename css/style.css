@@ -97,7 +97,48 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative; /* anchor for the floating Settings button */
 }
+
+/* ---------- Floating Settings button ---------- */
+/* Sits top-left on every page (hidden on the Settings page, which has its
+   own back arrow). Below the library overlays (z-index 20) so they cover it. */
+.settings-fab {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 0.5rem);
+  left: 0.65rem;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.settings-fab:active { transform: translateY(1px); }
+.settings-fab[hidden] { display: none; }
+
+/* ---------- Page header (Settings, Chords) ---------- */
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.page-title {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 500;
+  margin: 0;
+}
+/* A standalone title (no back arrow beside it) has to clear the gear. */
+.page-head .page-title { margin-left: 0; }
+#page-chords .page-title { margin-left: 2.6rem; }
 
 /* ---------- Pages ---------- */
 #page-container {
@@ -154,6 +195,12 @@ body {
 /* Piano mode has no tuner -- drop the button and the remaining three space
    themselves evenly (each is still flex: 1). */
 body[data-instrument="piano"] .nav-btn--tuner { display: none; }
+
+/* The Chords tab icon follows the instrument: chord grid for guitar, a small
+   keyboard for piano. */
+.nav-chords-ic--piano { display: none; }
+body[data-instrument="piano"] .nav-chords-ic--guitar { display: none; }
+body[data-instrument="piano"] .nav-chords-ic--piano { display: block; }
 
 /* ---------- Tuner ---------- */
 .tuner {
@@ -457,7 +504,7 @@ select {
   font-family: var(--font-display);
   font-size: 1.6rem;
   font-weight: 500;
-  margin: 0;
+  margin: 0 0 0 2.6rem; /* clear the floating Settings gear top-left */
 }
 
 .add-button {
@@ -1049,3 +1096,88 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
    axes automatically -- no hand-tuned top/left offsets to drift out of
    sync with the track size again. */
 .theme-toggle[aria-pressed="true"] .theme-toggle__thumb { transform: translateX(18px); }
+
+/* ---------- Chord book ---------- */
+.chords { display: block; }
+
+.chords__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chords__sub {
+  margin: 0.15rem 0 1.1rem 2.6rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.chord-roots,
+.chord-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.chord-types { margin-bottom: 1.2rem; }
+
+.chord-chip {
+  flex: 0 0 auto;
+  min-width: 2.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.chord-chip--type { min-width: 3rem; }
+.chord-chip:active { transform: translateY(1px); }
+.chord-chip.is-active {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.chord-card {
+  margin-top: 0.3rem;
+  padding: 1.3rem 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  text-align: center;
+}
+.chord-card__name {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  font-weight: 500;
+  line-height: 1;
+  margin-bottom: 1rem;
+}
+.chord-card__diagram {
+  display: flex;
+  justify-content: center;
+  min-height: 120px;
+  align-items: center;
+}
+.fretboard { width: 172px; height: auto; overflow: visible; }
+.keyboard { width: 100%; max-width: 320px; height: auto; }
+
+.chord-card__notes {
+  margin-top: 1rem;
+  font-size: 0.98rem;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.chord-card__hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  min-height: 1em;
+}

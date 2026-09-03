@@ -2,7 +2,7 @@
   "name": "Guitar",
   "short_name": "Guitar",
   "description": "A personal guitar companion: tuner, song library, metronome and more, all in one place.",
-  "start_url": "./index.html",
+  "start_url": "./index.html?instrument=guitar",
   "scope": "./",
   "display": "standalone",
   "background_color": "#221609",

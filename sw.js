@@ -5,18 +5,20 @@
 
 // Bump on every deploy, in lockstep with BUILD in js/app.js -- the two always
 // move together, so the number shown in Settings identifies this exact cache.
-const CACHE = "guitar-v14";
+const CACHE = "guitar-v16";
 
 const SHELL = [
   "./",
   "./index.html",
   "./manifest.json",
+  "./manifest-piano.json",
   "./css/style.css",
   "./js/tuner.js",
   "./js/metronome-engine.js",
   "./js/app.js",
   "./js/metronome.js",
   "./js/library.js",
+  "./js/chords.js",
   "./js/sync.js",
   "./audio/E2.mp3",
   "./audio/A2.mp3",
@@ -29,6 +31,10 @@ const SHELL = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
+  "./icons/icon-piano.svg",
+  "./icons/icon-piano-192.png",
+  "./icons/icon-piano-512.png",
+  "./icons/apple-touch-icon-piano.png",
 ];
 
 self.addEventListener("install", (event) => {

@@ -36,17 +36,30 @@
   /* ---------- Navigation ---------- */
   const navButtons = document.querySelectorAll(".nav-btn");
   const pages = document.querySelectorAll(".page");
+  const settingsFab = document.getElementById("settings-fab");
+  const settingsBack = document.getElementById("settings-back");
   let currentPage = null;
+  // Settings is no longer in the bottom nav -- it opens from the floating gear
+  // and its back arrow returns you to wherever you were. previousPage tracks
+  // the last non-settings page for exactly that.
+  let previousPage = "library";
 
   function showPage(target) {
+    if (currentPage && currentPage !== "settings") previousPage = currentPage;
     currentPage = target;
     pages.forEach((p) => (p.hidden = p.dataset.page !== target));
     navButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.target === target));
+    // The gear would sit on top of the Settings page's own back arrow.
+    if (settingsFab) settingsFab.hidden = target === "settings";
+    if (target === "chords" && window.GuitarChords) window.GuitarChords.refresh();
   }
 
   navButtons.forEach((btn) => {
     btn.addEventListener("click", () => showPage(btn.dataset.target));
   });
+
+  if (settingsFab) settingsFab.addEventListener("click", () => showPage("settings"));
+  if (settingsBack) settingsBack.addEventListener("click", () => showPage(previousPage || "library"));
 
   /* ---------- Instrument mode (guitar / piano) ---------- */
   // The app doubles as a piano companion. The mode is global: it swaps the
@@ -55,13 +68,44 @@
   // set of chord-lookup sites (handled in library.js, which listens for the
   // "instrumentchange" event dispatched below).
   const INSTRUMENTS = ["guitar", "piano"];
-  let instrument = localStorage.getItem("guitar-instrument");
+  // A ?instrument= in the URL wins over the stored value. The piano PWA is
+  // installed with start_url "./index.html?instrument=piano" (and the guitar
+  // one with ?instrument=guitar), so each installed icon always opens in its
+  // own mode regardless of what the shared localStorage last held. Opened
+  // plain in a browser (no param), we fall back to the last used instrument.
+  const forcedInstrument = new URLSearchParams(location.search).get("instrument");
+  let instrument = INSTRUMENTS.includes(forcedInstrument)
+    ? forcedInstrument
+    : localStorage.getItem("guitar-instrument");
   if (!INSTRUMENTS.includes(instrument)) instrument = "guitar";
   document.body.dataset.instrument = instrument;
 
-  const instrumentToggle = document.getElementById("instrument-toggle");
-  if (instrumentToggle) instrumentToggle.setAttribute("aria-checked", instrument === "piano" ? "true" : "false");
+  // The guitar/piano switch appears in more than one place (library header,
+  // chord book header) -- keep every instance in sync.
+  const instrumentToggles = document.querySelectorAll(".instrument-switch");
+  const syncInstrumentToggles = (inst) =>
+    instrumentToggles.forEach((t) => t.setAttribute("aria-checked", inst === "piano" ? "true" : "false"));
+  syncInstrumentToggles(instrument);
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+
+  // Swap the app's identity (tab title, iOS home-screen title, icon, manifest)
+  // to match the instrument. On iOS this is read at "Add to Home Screen" time,
+  // so installing while in piano mode captures the name "Piano" and the piano
+  // icon; on Android the manifest swap does the same for the installed PWA.
+  const linkManifest = document.querySelector('link[rel="manifest"]');
+  const linkAppleIcon = document.querySelector('link[rel="apple-touch-icon"]');
+  const linkFavicon = document.querySelector('link[rel="icon"]');
+  const metaAppleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+
+  function applyInstrumentIdentity(inst) {
+    const piano = inst === "piano";
+    document.title = piano ? "Piano" : "Guitar";
+    if (metaAppleTitle) metaAppleTitle.setAttribute("content", piano ? "Piano" : "Guitar");
+    if (linkManifest) linkManifest.setAttribute("href", piano ? "manifest-piano.json" : "manifest.json");
+    if (linkAppleIcon) linkAppleIcon.setAttribute("href", piano ? "icons/apple-touch-icon-piano.png" : "icons/apple-touch-icon.png");
+    if (linkFavicon) linkFavicon.setAttribute("href", piano ? "icons/icon-piano.svg" : "icons/icon.svg");
+  }
+  applyInstrumentIdentity(instrument);
 
   // Keep the mobile status-bar tint in step with whatever palette is active.
   function syncThemeColor() {
@@ -74,8 +118,9 @@
     if (!INSTRUMENTS.includes(next) || next === instrument) return;
     instrument = next;
     document.body.dataset.instrument = next;
-    if (instrumentToggle) instrumentToggle.setAttribute("aria-checked", next === "piano" ? "true" : "false");
+    syncInstrumentToggles(next);
     localStorage.setItem("guitar-instrument", next);
+    applyInstrumentIdentity(next);
     // The tuner tab is guitar-only; if it's on screen when switching to
     // piano, step back to the library (where piano mode lives).
     if (next === "piano" && currentPage === "tuner") showPage("library");
@@ -83,11 +128,11 @@
     document.dispatchEvent(new CustomEvent("instrumentchange", { detail: { instrument: next } }));
   }
 
-  if (instrumentToggle) {
-    instrumentToggle.addEventListener("click", () => {
+  instrumentToggles.forEach((t) => {
+    t.addEventListener("click", () => {
       setInstrument(instrument === "guitar" ? "piano" : "guitar");
     });
-  }
+  });
 
   // Exposed so the song library can read the current instrument and switch
   // tabs without needing its own copy of this logic.
@@ -113,7 +158,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "14";
+  const BUILD = "16";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 
@@ -509,11 +554,12 @@
       if (mySeq !== toneRequestSeq) return; // superseded by a later tap -- stay quiet
       playReferenceTone(freq).then(() => {
         if (mySeq !== toneRequestSeq) return;
-        if (!isListening) {
-          startListening();
-        } else {
-          setHint("Listening… play the string.");
-        }
+        // Tapping a string only auditions its reference pitch -- it no longer
+        // starts the microphone. The mic (and its permission prompt) is asked
+        // for exactly once, when the user deliberately taps "Start tuning".
+        // On iOS a PWA re-asks every launch, so we don't want a stray tap on
+        // a string name to trigger that when someone is only checking a pitch.
+        setHint(isListening ? "Listening… play the string." : "Tap “Start tuning” when you’re ready.");
       });
     }, TONE_SETTLE_MS);
   }
