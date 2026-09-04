@@ -15,6 +15,9 @@
 // agnostic.
 (function () {
   const STORAGE_KEYS = { guitar: "guitar-sheets", piano: "piano-sheets" };
+  // Autoscroll tempo is a plain user preference (not per-song, not part of
+  // any sheet record) so it's kept in its own tiny localStorage key.
+  const SCROLL_SPEED_KEY = "guitar-autoscroll-speed";
 
   // Same Cloudflare Worker as js/sync.js (SYNC_URL), plus the /song route:
   // it scrapes a chord sheet, caches it, and hands back the same "chords
@@ -312,8 +315,82 @@
   const root = document.getElementById("songsheet");
   if (!root) return;
 
-  let state = null; // { song, inst, record, adding, expanded }
+  let state = null; // { song, inst, record, adding, expanded, autoscroll }
   let panel = null; // the expanded content area; null while collapsed
+
+  /* ================================================================
+     Autoscroll -- scrolls the enclosing overlay (not the panel itself)
+     at a steady speed while the sheet is on screen. Speed is a small
+     1-10 "level" mapped to px/s; the level is remembered, the on/off
+     state is not (a reopened sheet always starts stopped).
+     ================================================================ */
+
+  function loadScrollSpeed() {
+    const v = parseInt(localStorage.getItem(SCROLL_SPEED_KEY), 10);
+    return v >= 1 && v <= 10 ? v : 4;
+  }
+  function saveScrollSpeed(level) {
+    try {
+      localStorage.setItem(SCROLL_SPEED_KEY, String(level));
+    } catch (e) {
+      /* quota -- fine to just not remember it */
+    }
+  }
+  function levelToPxPerSec(level) {
+    return level * 8; // 8..80 px/s
+  }
+
+  let scrollRAF = null;
+  let scrollLastTs = null;
+  let scrollOutsideHandler = null;
+
+  function scrollContainer() {
+    return root.closest(".overlay") || document.scrollingElement || document.documentElement;
+  }
+
+  function stopAutoscroll() {
+    if (scrollRAF != null) cancelAnimationFrame(scrollRAF);
+    scrollRAF = null;
+    scrollLastTs = null;
+  }
+
+  function autoscrollTick(ts) {
+    const active =
+      state && state.expanded && state.record && !state.adding && state.autoscroll.on;
+    if (!active) {
+      stopAutoscroll();
+      return;
+    }
+    const box = scrollContainer();
+    if (scrollLastTs != null) {
+      const dt = (ts - scrollLastTs) / 1000;
+      box.scrollTop += levelToPxPerSec(state.autoscroll.speed) * dt;
+      if (box.scrollTop >= box.scrollHeight - box.clientHeight - 1) {
+        // Reached the bottom -- stop rather than sit there doing nothing.
+        state.autoscroll.on = false;
+        stopAutoscroll();
+        render();
+        return;
+      }
+    }
+    scrollLastTs = ts;
+    scrollRAF = requestAnimationFrame(autoscrollTick);
+  }
+
+  function startAutoscroll() {
+    if (scrollRAF != null) return;
+    scrollLastTs = null;
+    scrollRAF = requestAnimationFrame(autoscrollTick);
+  }
+
+  function closeScrollMenu() {
+    if (!state || !state.autoscroll || !state.autoscroll.menuOpen) return;
+    state.autoscroll.menuOpen = false;
+    if (scrollOutsideHandler) {
+      document.removeEventListener("pointerdown", scrollOutsideHandler, true);
+      scrollOutsideHandler = null;
+    }
+  }
 
   function currentInstrument() {
     return (window.GuitarApp && window.GuitarApp.getInstrument()) ||
@@ -344,12 +421,15 @@
       fetching: false,
       fetchError: null,
       confirmRemove: false,
+      autoscroll: { on: false, speed: loadScrollSpeed(), menuOpen: false },
     };
     root.hidden = false;
     render();
   }
 
   function close() {
+    stopAutoscroll();
+    closeScrollMenu();
     state = null;
     panel = null;
     root.hidden = true;
@@ -592,6 +672,10 @@
     bar.appendChild(tp);
 
     const tools = el("div", "songsheet__tools");
+    const hasLyrics = shown.sections.some((s) =>
+      s.lines.some((l) => l && l.lyric && l.lyric.trim())
+    );
+    if (hasLyrics) tools.appendChild(buildScrollControl());
     if (state.confirmRemove) {
       // Inline confirm instead of window.confirm() -- confirm() dialogs are
       // suppressed in some embedded/preview browser contexts (silently
@@ -695,6 +779,88 @@
         )
       );
     }
+  }
+
+  // The autoscroll button + its popover menu (on/off, tempo). Only ever
+  // built when the sheet actually has lyric text to scroll through.
+  function buildScrollControl() {
+    const wrap = el("div", "songsheet__scroll");
+
+    const btn = el("button", "songsheet__scroll-btn", null);
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", state.autoscroll.menuOpen ? "true" : "false");
+    btn.setAttribute("aria-label", "Autoscroll");
+    if (state.autoscroll.on) btn.classList.add("is-active");
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 4v13M12 17l-5-5M12 17l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (state.autoscroll.menuOpen) {
+        closeScrollMenu();
+        render();
+        return;
+      }
+      state.autoscroll.menuOpen = true;
+      render();
+      // Registered after this click has finished bubbling, so the same tap
+      // that opened the menu doesn't also close it via the outside handler.
+      setTimeout(() => {
+        if (!state || !state.autoscroll.menuOpen) return;
+        // Matched by class, not by node reference -- render() may have
+        // rebuilt the menu (a fresh wrap/btn) by the time this fires.
+        scrollOutsideHandler = (ev) => {
+          if (!ev.target.closest || !ev.target.closest(".songsheet__scroll")) {
+            closeScrollMenu();
+            render();
+          }
+        };
+        document.addEventListener("pointerdown", scrollOutsideHandler, true);
+      }, 0);
+    });
+    wrap.appendChild(btn);
+
+    if (state.autoscroll.menuOpen) {
+      const menu = el("div", "songsheet__scroll-menu");
+
+      const toggleRow = el("label", "songsheet__scroll-row");
+      toggleRow.appendChild(el("span", null, "Autoscroll"));
+      const toggle = el("input", "songsheet__scroll-toggle");
+      toggle.type = "checkbox";
+      toggle.checked = state.autoscroll.on;
+      toggle.addEventListener("change", () => {
+        state.autoscroll.on = toggle.checked;
+        if (state.autoscroll.on) startAutoscroll();
+        else stopAutoscroll();
+        btn.classList.toggle("is-active", state.autoscroll.on);
+      });
+      toggleRow.appendChild(toggle);
+      menu.appendChild(toggleRow);
+
+      const speedWrap = el("label", "songsheet__scroll-speed");
+      const speedHead = el("div", "songsheet__scroll-speed-head");
+      speedHead.appendChild(el("span", null, "Tempo"));
+      const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
+      speedHead.appendChild(speedVal);
+      speedWrap.appendChild(speedHead);
+      const speed = el("input", null);
+      speed.type = "range";
+      speed.min = "1";
+      speed.max = "10";
+      speed.step = "1";
+      speed.value = String(state.autoscroll.speed);
+      speed.addEventListener("input", () => {
+        state.autoscroll.speed = parseInt(speed.value, 10);
+        speedVal.textContent = speed.value;
+      });
+      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
+      speedWrap.appendChild(speed);
+      menu.appendChild(speedWrap);
+
+      wrap.appendChild(menu);
+    }
+
+    return wrap;
   }
 
   // Split a lyric string at each chord index; each piece carries the chord

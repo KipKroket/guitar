@@ -1165,6 +1165,78 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   color: var(--ink-soft);
 }
 
+.songsheet__scroll { position: relative; }
+.songsheet__scroll-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.songsheet__scroll-btn:active { transform: translateY(1px); }
+.songsheet__scroll-btn.is-active {
+  border-color: var(--amber-deep);
+  background: var(--amber);
+  color: var(--bg);
+}
+.songsheet__scroll-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 5;
+  width: 12rem;
+  padding: 0.85rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+.songsheet__scroll-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.songsheet__scroll-toggle {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
+.songsheet__scroll-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.songsheet__scroll-speed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+.songsheet__scroll-speed-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}
+.songsheet__scroll-speed input[type="range"] {
+  width: 100%;
+  accent-color: var(--amber);
+}
+
 .songsheet__chips {
   display: flex;
   flex-wrap: wrap;
