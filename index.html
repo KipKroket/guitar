@@ -199,6 +199,12 @@
           <p class="song-detail__meta" id="detail-meta"></p>
           <button id="detail-save-btn" class="save-button" type="button">Save to Library</button>
 
+          <!-- Full lyrics with the chords placed above the words. Collapsed by
+               default; sits above the external Chords/Tabs links. Populated by
+               js/songsheet.js from a sheet the user pastes in -- the text is
+               kept in its own localStorage store, never synced or exported. -->
+          <div class="songsheet" id="songsheet" hidden></div>
+
           <button id="detail-metronome-btn" class="detail-metro-btn" type="button" hidden>
             <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 8V5m-3 0h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 9 l4 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
             <span>Practise at <b id="detail-bpm-value">120</b> BPM</span>
@@ -362,6 +368,7 @@
 <script src="js/metronome.js"></script>
 <script src="js/library.js"></script>
 <script src="js/chords.js"></script>
+<script src="js/songsheet.js"></script>
 <script src="js/sync.js"></script>
 <script>
   if ("serviceWorker" in navigator) {

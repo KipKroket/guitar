@@ -594,6 +594,11 @@
     detailOverlay.hidden = false;
     closeSearch();
 
+    // Lyrics-with-chords sheet (js/songsheet.js). Available for every song,
+    // custom ones included -- a custom song is exactly where you'd paste
+    // your own sheet.
+    if (window.GuitarSongSheet) window.GuitarSongSheet.open(currentDetailSong);
+
     // Best-effort tempo: if TheAudioDB knows it, show it beside the year and
     // reveal the "open in metronome" button.
     if (!custom) {
@@ -609,6 +614,7 @@
 
   function closeDetail() {
     detailOverlay.hidden = true;
+    if (window.GuitarSongSheet) window.GuitarSongSheet.close();
     currentDetailId = null;
     currentDetailSong = null;
     detailBpm = null;

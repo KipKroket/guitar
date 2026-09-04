@@ -5,6 +5,27 @@ all on Cloudflare's **free** plan (100k requests/day, no credit card, never
 sleeps). Users sign in with a username + 6-digit passcode; their library is
 merged with a server copy so no device overwrites another.
 
+The same Worker also serves **`POST /song`** for the song-sheet feature: it
+scrapes a chord sheet (Ultimate Guitar first, then e-chords), converts it to
+the plain "chords above the lyrics" text `../js/songsheet.js` parses, caches
+it in the D1 table `sheets`, and returns it. Open endpoint, rate-limited to
+40 upstream fetches per IP per hour (cache hits don't count). Request body
+`{ artist, title }` or `{ url }`, optional `{ refresh: true }` to bypass the
+cache.
+
+## Shipping the /song update to the live Worker
+
+1. **Schema:** Cloudflare dashboard → **D1** → `guitar-sync` → **Console**,
+   paste the two new `CREATE TABLE` blocks from `schema.sql` (`sheets` and
+   `fetch_attempts`) and run them. `CREATE TABLE IF NOT EXISTS` is safe to
+   re-run, so pasting the whole file also works.
+2. **Code:** Workers & Pages → `guitar-sync` → **Edit code** → replace with
+   `src/worker.js` → **Deploy**.
+3. Quick check:
+   `curl -X POST https://guitar-sync.julianleendertse.workers.dev/song -H 'content-type: application/json' -d '{"artist":"bob dylan","title":"knockin on heavens door"}'`
+   → JSON with a `raw` chord sheet (or `{"error":...,"tried":[...]}` if both
+   sources were blocked — then the app falls back to the paste box).
+
 ## Already deployed (2026-09-03)
 
 - Worker: **https://guitar-sync.julianleendertse.workers.dev** (this is the

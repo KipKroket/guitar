@@ -221,6 +221,109 @@
     return `<svg viewBox="-1 -1 ${width + 2} ${H + 2}" class="keyboard" role="img" aria-label="Chord on the keyboard">${whites}${blacks}</svg>`;
   }
 
+  /* ---------------- Arbitrary chord symbols ----------------
+     The chord book itself only ever asks for a root + one of the nine
+     QUALITIES. The song sheet (js/songsheet.js) needs to draw whatever
+     symbol turns up in a pasted sheet -- "Am", "G7", "F#m7", "Csus4",
+     "D/F#" -- so parse the text down to the nearest shape we can draw.
+     Unknown extensions collapse to the closest triad/seventh: still a
+     useful diagram, just not a full jazz voicing. */
+  const FLAT_TO_SHARP = { DB: "C#", EB: "D#", GB: "F#", AB: "G#", BB: "A#", CB: "B", FB: "E" };
+
+  function normaliseRoot(letter, accidental) {
+    let root = letter.toUpperCase() + (accidental === "#" ? "#" : accidental === "b" ? "b" : "");
+    if (root.length === 2 && root[1] === "b") root = FLAT_TO_SHARP[root.toUpperCase()] || root;
+    if (root === "E#") root = "F";
+    if (root === "B#") root = "C";
+    return NOTES.indexOf(root);
+  }
+
+  // Text after the root -> one of the QUALITIES keys. Order matters: the
+  // major-seventh spellings are tested before the bare "m" (minor) check,
+  // and "M7"/"maj7" (major) must not be mistaken for "m7" (minor).
+  function mapQuality(rest) {
+    const r = (rest || "").trim();
+    if (!r) return "maj";
+    if (/^(maj7|ma7|M7|Δ7?|j7)/.test(r)) return "maj7";
+    if (/^(maj9|maj11|maj13|6\/9|69)/i.test(r)) return "maj7";
+    const low = r.toLowerCase();
+    if (low === "m" || low === "min" || low === "-") return "min";
+    if (/^(m|min|-)(6)/.test(low)) return "min";
+    if (/^(m|min|-)(7|9|11|13|maj7)/.test(low)) return "m7";
+    if (/^(m|min|-)/.test(low) && !/^maj/.test(low)) return "min";
+    if (/^(sus2|2)/.test(low)) return "sus2";
+    if (/^(sus4?|4)/.test(low)) return "sus4";
+    if (/^(dim|°|o)/.test(low)) return "dim";
+    if (/^(aug|\+)/.test(low)) return "aug";
+    if (/^(7|9|11|13)/.test(low)) return "7";
+    return "maj"; // 6, add9, "2", and anything unrecognised
+  }
+
+  function parseSymbol(symbol) {
+    if (!symbol || typeof symbol !== "string") return null;
+    const m = symbol.trim().match(/^([A-Ga-g])(#|b|♯|♭)?(.*)$/);
+    if (!m) return null;
+    const acc = m[2] === "♯" ? "#" : m[2] === "♭" ? "b" : m[2];
+    const rootIdx = normaliseRoot(m[1], acc);
+    if (rootIdx === -1) return null;
+    let rest = m[3] || "";
+    let bass = null;
+    const slash = rest.match(/\/([A-Ga-g])(#|b|♯|♭)?\s*$/);
+    if (slash) {
+      const bAcc = slash[2] === "♯" ? "#" : slash[2] === "♭" ? "b" : slash[2];
+      const bIdx = normaliseRoot(slash[1], bAcc);
+      if (bIdx !== -1) bass = NOTES[bIdx];
+      rest = rest.slice(0, slash.index);
+    }
+    return { rootIdx, qualityKey: mapQuality(rest), bass };
+  }
+
+  // Draw the diagram for a free-text chord symbol into `el`. Returns true when
+  // a shape was actually drawn (piano always draws; guitar can come up empty
+  // for a rootless/odd symbol).
+  function renderInto(el, symbol) {
+    if (!el) return false;
+    const parsed = parseSymbol(symbol);
+    if (!parsed) {
+      el.textContent = "";
+      return false;
+    }
+    const quality = QUALITIES.find((q) => q.key === parsed.qualityKey) || QUALITIES[0];
+    const piano = currentInstrument() === "piano";
+    let svg = "";
+    let hint = "";
+    if (piano) {
+      svg = renderKeyboard(parsed.rootIdx, quality.intervals);
+    } else {
+      const shape = guitarShape(parsed.rootIdx, quality);
+      if (shape) {
+        svg = renderFretboard(shape);
+        hint = shape.label;
+      }
+    }
+    // Show the symbol exactly as it was written ("Cadd9", "Bb", "F#m7") -- the
+    // notes line below spells out what actually got drawn when the two differ.
+    const name = symbol.trim();
+    const tones = quality.intervals.map((iv) => NOTES[(parsed.rootIdx + iv) % 12]).join("  ·  ");
+
+    el.textContent = "";
+    const nameEl2 = document.createElement("div");
+    nameEl2.className = "mini-chord__name";
+    nameEl2.textContent = name;
+    el.appendChild(nameEl2);
+    if (svg) {
+      const holder = document.createElement("div");
+      holder.className = "mini-chord__diagram";
+      holder.innerHTML = svg; // built entirely from our own numbers, no user text
+      el.appendChild(holder);
+    }
+    const notesEl2 = document.createElement("div");
+    notesEl2.className = "mini-chord__notes";
+    notesEl2.textContent = hint ? tones + "  —  " + hint : tones;
+    el.appendChild(notesEl2);
+    return Boolean(svg) || piano;
+  }
+
   /* ---------------- Wiring ---------------- */
   const rootsEl = document.getElementById("chord-roots");
   const typesEl = document.getElementById("chord-types");
@@ -305,6 +408,6 @@
 
   // app.js calls this when the Chords tab is shown; render once now too so the
   // page is ready if it's opened before any instrument change.
-  window.GuitarChords = { refresh: render };
+  window.GuitarChords = { refresh: render, renderInto: renderInto };
   render();
 })();

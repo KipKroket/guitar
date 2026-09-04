@@ -5,7 +5,7 @@
 
 // Bump on every deploy, in lockstep with BUILD in js/app.js -- the two always
 // move together, so the number shown in Settings identifies this exact cache.
-const CACHE = "guitar-v16";
+const CACHE = "guitar-v17";
 
 const SHELL = [
   "./",
@@ -19,6 +19,7 @@ const SHELL = [
   "./js/metronome.js",
   "./js/library.js",
   "./js/chords.js",
+  "./js/songsheet.js",
   "./js/sync.js",
   "./audio/E2.mp3",
   "./audio/A2.mp3",
