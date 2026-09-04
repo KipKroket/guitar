@@ -359,6 +359,14 @@
       state && state.expanded && state.record && !state.adding && state.autoscroll.on;
     if (!active) {
       stopAutoscroll();
+      // Something other than an explicit toggle-off stopped us (the panel
+      // collapsed, the sheet went into edit mode, ...) -- reflect that in
+      // state so the checkbox/FAB don't claim autoscroll is still on with
+      // nothing actually moving.
+      if (state && state.autoscroll && state.autoscroll.on) {
+        state.autoscroll.on = false;
+        render();
+      }
       return;
     }
     const box = scrollContainer();
@@ -392,6 +400,111 @@
     }
   }
 
+  /* ---- Floating "while scrolling" control -----------------------------
+     A small round button pinned to the bottom-right of the viewport
+     (position: fixed -- a plain child of <body>, not of #songsheet, so it
+     isn't clipped by the overlay's own overflow-y:auto and stays put
+     regardless of scroll position), visible only while autoscroll is
+     actually running. Lets you change tempo or stop without having to
+     scroll back up to the toolbar. ---- */
+
+  let fab = null;
+  let fabOutsideHandler = null;
+
+  function closeFabMenu() {
+    if (!state || !state.autoscroll || !state.autoscroll.fabMenuOpen) return;
+    state.autoscroll.fabMenuOpen = false;
+    if (fabOutsideHandler) {
+      document.removeEventListener("pointerdown", fabOutsideHandler, true);
+      fabOutsideHandler = null;
+    }
+  }
+
+  function renderFab() {
+    const show = !!(
+      state && state.expanded && state.record && !state.adding && state.autoscroll.on
+    );
+    if (!show) {
+      closeFabMenu();
+      if (fab) {
+        fab.remove();
+        fab = null;
+      }
+      return;
+    }
+    if (!fab) {
+      fab = el("div", "songsheet__fab");
+      document.body.appendChild(fab);
+    }
+    fab.textContent = "";
+
+    const btn = el("button", "songsheet__fab-btn", null);
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", state.autoscroll.fabMenuOpen ? "true" : "false");
+    btn.setAttribute("aria-label", "Autoscroll instellingen");
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.autoscroll.fabMenuOpen = !state.autoscroll.fabMenuOpen;
+      renderFab();
+      if (!state.autoscroll.fabMenuOpen) return;
+      // Registered after this click has finished bubbling, so the same tap
+      // that opened the menu doesn't also close it via the outside handler.
+      setTimeout(() => {
+        if (!state || !state.autoscroll.fabMenuOpen) return;
+        fabOutsideHandler = (ev) => {
+          if (!ev.target.closest || !ev.target.closest(".songsheet__fab")) {
+            closeFabMenu();
+            renderFab();
+          }
+        };
+        document.addEventListener("pointerdown", fabOutsideHandler, true);
+      }, 0);
+    });
+    fab.appendChild(btn);
+
+    if (state.autoscroll.fabMenuOpen) {
+      const menu = el("div", "songsheet__fab-menu");
+
+      const speedWrap = el("label", "songsheet__scroll-speed");
+      const speedHead = el("div", "songsheet__scroll-speed-head");
+      speedHead.appendChild(el("span", null, "Tempo"));
+      const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
+      speedHead.appendChild(speedVal);
+      speedWrap.appendChild(speedHead);
+      const speed = el("input", null);
+      speed.type = "range";
+      speed.min = "1";
+      speed.max = "10";
+      speed.step = "1";
+      speed.value = String(state.autoscroll.speed);
+      speed.addEventListener("input", () => {
+        state.autoscroll.speed = parseInt(speed.value, 10);
+        speedVal.textContent = speed.value;
+      });
+      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
+      speedWrap.appendChild(speed);
+      menu.appendChild(speedWrap);
+
+      const stop = el(
+        "button",
+        "songsheet__btn songsheet__btn--sm songsheet__btn--danger songsheet__fab-stop",
+        "Stop autoscroll"
+      );
+      stop.type = "button";
+      stop.addEventListener("click", () => {
+        state.autoscroll.on = false;
+        stopAutoscroll();
+        render();
+      });
+      menu.appendChild(stop);
+
+      fab.appendChild(menu);
+    }
+  }
+
   function currentInstrument() {
     return (window.GuitarApp && window.GuitarApp.getInstrument()) ||
       document.body.dataset.instrument || "guitar";
@@ -421,7 +534,7 @@
       fetching: false,
       fetchError: null,
       confirmRemove: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), menuOpen: false },
+      autoscroll: { on: false, speed: loadScrollSpeed(), menuOpen: false, fabMenuOpen: false },
     };
     root.hidden = false;
     render();
@@ -432,16 +545,21 @@
     closeScrollMenu();
     state = null;
     panel = null;
+    renderFab();
     root.hidden = true;
     root.textContent = "";
   }
 
   function render() {
-    if (!state) return;
+    if (!state) {
+      renderFab();
+      return;
+    }
     root.textContent = "";
     panel = null;
 
     root.appendChild(buildToggle());
+    renderFab();
     if (!state.expanded) return;
 
     panel = el("div", "songsheet__panel");
@@ -844,6 +962,7 @@
         if (state.autoscroll.on) startAutoscroll();
         else stopAutoscroll();
         btn.classList.toggle("is-active", state.autoscroll.on);
+        renderFab();
       });
       toggleRow.appendChild(toggle);
       menu.appendChild(toggleRow);
