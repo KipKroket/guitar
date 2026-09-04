@@ -653,9 +653,28 @@
     const semis = state.record.transpose | 0;
     const shown = transposeModel(model, semis);
 
-    /* ---- toolbar: transpose, edit, clear ---- */
+    /* ---- toolbar: two rows so it doesn't feel like a wall of buttons --
+       the primary row (autoscroll, edit) stays put; transpose and remove
+       are secondary, so they sit in a quieter row underneath. ---- */
     const bar = el("div", "songsheet__bar");
+    const hasLyrics = shown.sections.some((s) =>
+      s.lines.some((l) => l && l.lyric && l.lyric.trim())
+    );
 
+    const primaryRow = el("div", "songsheet__bar-row");
+    if (hasLyrics) primaryRow.appendChild(buildScrollControl());
+    if (!state.confirmRemove) {
+      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
+      edit.type = "button";
+      edit.addEventListener("click", () => {
+        state.adding = true;
+        render();
+      });
+      primaryRow.appendChild(edit);
+    }
+    bar.appendChild(primaryRow);
+
+    const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
     const tp = el("div", "songsheet__transpose");
     const minus = el("button", "songsheet__step", "−");
     minus.type = "button";
@@ -669,19 +688,15 @@
     tp.appendChild(minus);
     tp.appendChild(amount);
     tp.appendChild(plus);
-    bar.appendChild(tp);
+    secondaryRow.appendChild(tp);
 
-    const tools = el("div", "songsheet__tools");
-    const hasLyrics = shown.sections.some((s) =>
-      s.lines.some((l) => l && l.lyric && l.lyric.trim())
-    );
-    if (hasLyrics) tools.appendChild(buildScrollControl());
     if (state.confirmRemove) {
       // Inline confirm instead of window.confirm() -- confirm() dialogs are
       // suppressed in some embedded/preview browser contexts (silently
       // returning false, so the button looked broken), and a two-tap inline
       // control is nicer on a phone anyway.
-      tools.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
+      const confirmWrap = el("div", "songsheet__confirm");
+      confirmWrap.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
       const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
       yes.type = "button";
       yes.addEventListener("click", () => {
@@ -696,25 +711,19 @@
         state.confirmRemove = false;
         render();
       });
-      tools.appendChild(yes);
-      tools.appendChild(no);
+      confirmWrap.appendChild(yes);
+      confirmWrap.appendChild(no);
+      secondaryRow.appendChild(confirmWrap);
     } else {
-      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
-      edit.type = "button";
-      edit.addEventListener("click", () => {
-        state.adding = true;
-        render();
-      });
       const clear = el("button", "songsheet__btn songsheet__btn--sm", "Remove");
       clear.type = "button";
       clear.addEventListener("click", () => {
         state.confirmRemove = true;
         render();
       });
-      tools.appendChild(edit);
-      tools.appendChild(clear);
+      secondaryRow.appendChild(clear);
     }
-    bar.appendChild(tools);
+    bar.appendChild(secondaryRow);
     panel.appendChild(bar);
 
     if (model.meta.capo) {
@@ -786,14 +795,16 @@
   function buildScrollControl() {
     const wrap = el("div", "songsheet__scroll");
 
-    const btn = el("button", "songsheet__scroll-btn", null);
+    const btn = el("button", "songsheet__btn songsheet__btn--sm songsheet__scroll-btn", null);
     btn.type = "button";
     btn.setAttribute("aria-haspopup", "true");
     btn.setAttribute("aria-expanded", state.autoscroll.menuOpen ? "true" : "false");
-    btn.setAttribute("aria-label", "Autoscroll");
     if (state.autoscroll.on) btn.classList.add("is-active");
+    // Double chevron = "keeps going down on its own", clearer at a glance
+    // than a single arrow (which reads as a plain scroll-to-bottom action).
     btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 4v13M12 17l-5-5M12 17l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    btn.appendChild(el("span", "songsheet__scroll-btn-label", "Autoscroll"));
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (state.autoscroll.menuOpen) {

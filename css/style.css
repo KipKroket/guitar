@@ -1123,13 +1123,23 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .songsheet__status--error { color: var(--ember); }
 
+/* Two stacked rows -- primary actions (autoscroll, edit) on top, the
+   quieter/rarer ones (transpose, remove) tucked underneath so the toolbar
+   doesn't read as a wall of equally-weighted buttons. */
 .songsheet__bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.4rem;
+}
+.songsheet__bar-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  margin-top: 0.4rem;
+  min-height: 32px;
 }
+.songsheet__bar-row--secondary { opacity: 0.82; }
 .songsheet__transpose {
   display: inline-flex;
   align-items: center;
@@ -1155,10 +1165,14 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   font-size: 0.85rem;
   color: var(--ink-soft);
 }
-.songsheet__tools { display: flex; align-items: center; gap: 0.5rem; }
 .songsheet__btn--danger {
   border-color: var(--ember);
   color: var(--ember);
+}
+.songsheet__confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .songsheet__confirm-label {
   font-size: 0.8rem;
@@ -1167,28 +1181,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 
 .songsheet__scroll { position: relative; }
 .songsheet__scroll-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+  gap: 0.4rem;
 }
-.songsheet__scroll-btn:active { transform: translateY(1px); }
 .songsheet__scroll-btn.is-active {
   border-color: var(--amber-deep);
   background: var(--amber);
   color: var(--bg);
 }
+.songsheet__scroll-btn-label { font-weight: 600; }
 .songsheet__scroll-menu {
   position: absolute;
   top: calc(100% + 0.5rem);
-  right: 0;
+  left: 0;
   z-index: 5;
   width: 12rem;
   padding: 0.85rem 0.9rem;
