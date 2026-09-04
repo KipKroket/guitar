@@ -764,8 +764,12 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   flex-direction: column;
   max-width: 480px;
   margin: 0 auto;
-  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 1.5rem;
+  /* Bottom padding needs real room past the home-indicator gesture strip --
+     a flat 1.5rem left the last button (Tabs) sitting right in that zone,
+     effectively unreachable on notched phones. */
+  padding: max(1rem, env(safe-area-inset-top)) 1.25rem calc(2.5rem + env(safe-area-inset-bottom));
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .overlay[hidden] { display: none; }

@@ -24,6 +24,17 @@
   const SEARCH_RETRY_DELAY_MS = 1200;
 
   /* ---------- Elements ---------- */
+  // The floating Settings gear lives at the same top-left spot these
+  // overlays put their own back arrow -- CSS alone doesn't reliably keep it
+  // out of the way (it's position:absolute in .app, the overlays are
+  // position:fixed, and those don't share one predictable stacking order),
+  // so hide it explicitly whenever an overlay covers the page.
+  const settingsFab = document.getElementById("settings-fab");
+  function syncSettingsFab() {
+    if (!settingsFab) return;
+    settingsFab.hidden = !searchOverlay.hidden || !detailOverlay.hidden;
+  }
+
   const addBtn = document.getElementById("library-add-btn");
   const listEl = document.getElementById("library-list");
   const emptyEl = document.getElementById("library-empty");
@@ -282,11 +293,13 @@
     searchInput.value = "";
     resetCustomForm();
     setTimeout(() => searchInput.focus(), 50);
+    syncSettingsFab();
   }
 
   function closeSearch() {
     searchOverlay.hidden = true;
     if (searchAbortController) searchAbortController.abort();
+    syncSettingsFab();
   }
 
   /* ---------- Custom song (not in the catalogue) ---------- */
@@ -593,6 +606,7 @@
 
     detailOverlay.hidden = false;
     closeSearch();
+    syncSettingsFab();
 
     // Lyrics-with-chords sheet (js/songsheet.js). Available for every song,
     // custom ones included -- a custom song is exactly where you'd paste
@@ -614,6 +628,7 @@
 
   function closeDetail() {
     detailOverlay.hidden = true;
+    syncSettingsFab();
     if (window.GuitarSongSheet) window.GuitarSongSheet.close();
     currentDetailId = null;
     currentDetailSong = null;

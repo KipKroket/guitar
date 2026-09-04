@@ -160,12 +160,14 @@ async function song(env, body, request) {
     return json({ error: "Too many fetches this hour — wait a bit, or paste the sheet in by hand." }, 429);
   }
 
+  // e-chords dropped from the default chain: both its search API and its
+  // song pages sit behind a Cloudflare JS challenge that a plain fetch() can
+  // never pass (confirmed -- it 403s identically with or without a Worker),
+  // so it never once succeeded here and only added latency. Left reachable
+  // via sourcesForUrl() for a pasted link, in case that ever changes.
   const chain = url
     ? sourcesForUrl(url)
-    : [
-        { name: "ultimate-guitar", run: () => ugSearchAndFetch(artist, title) },
-        { name: "e-chords", run: () => echordsSearchAndFetch(artist, title) },
-      ];
+    : [{ name: "ultimate-guitar", run: () => ugSearchAndFetch(artist, title) }];
 
   const tried = [];
   let result = null;
@@ -269,7 +271,7 @@ function ugContentToText(content, meta) {
     // Drop the "chord name + fret map" legend lines UG often opens with
     // ("G     3-x-0-0-0-3") -- the app has tappable diagrams for every chord.
     .split("\n")
-    .filter((ln) => !/^\s*[A-G][#b]?[a-z0-9]{0,4}\s+[0-9xX](?:[-\s][0-9xX]){3,5}\s*$/.test(ln))
+    .filter((ln) => !/^\s*[A-G][#b]?[a-zA-Z0-9]{0,6}(?:\/[A-G][#b]?)?\s+[0-9xX](?:[-\s][0-9xX]){3,5}\s*$/.test(ln))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -364,7 +366,13 @@ function sourcesForUrl(url) {
   ];
 }
 
-async function getHtml(pageUrl) {
+// A Cloudflare Worker's egress IPs are shared across every Worker on the
+// platform, so a site that's itself behind Cloudflare (Ultimate Guitar
+// included) sometimes rate-limits that shared range harder than it would a
+// single residential visitor -- one request in the ordinary rate, the next
+// a 429. A short retry absorbs that without the user ever seeing it.
+async function getHtml(pageUrl, attempt) {
+  attempt = attempt || 1;
   const res = await fetch(pageUrl, {
     headers: {
       "User-Agent": SCRAPE_UA,
@@ -374,8 +382,16 @@ async function getHtml(pageUrl) {
     redirect: "follow",
     cf: { cacheTtl: 1800, cacheEverything: true },
   });
+  if (res.status === 429 && attempt < 3) {
+    await sleep(500 * attempt);
+    return getHtml(pageUrl, attempt + 1);
+  }
   if (!res.ok) throw new Error("HTTP " + res.status);
   return await res.text();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normKey(s) {

@@ -43,7 +43,8 @@
   // "G     3-x-0-0-0-3". Useful in a printed chart, redundant here -- every
   // chord already has a tappable diagram -- so these are dropped entirely
   // rather than shown as a stray text line.
-  const FRET_LEGEND_LINE = /^\s*[A-G](?:#|b)?[a-zA-Z0-9]{0,5}\s+[0-9xX](?:[-\s][0-9xX]){3,5}\s*$/;
+  const FRET_LEGEND_LINE =
+    /^\s*[A-G](?:#|b)?[a-zA-Z0-9]{0,6}(?:\/[A-G](?:#|b)?)?\s+[0-9xX](?:[-\s][0-9xX]){3,5}\s*$/;
 
   /* ================================================================
      Parsing: raw text -> { meta, sections:[{ label, lines:[line] }] }
