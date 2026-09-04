@@ -1249,7 +1249,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .songsheet__fab {
   position: fixed;
   right: calc(1.1rem + env(safe-area-inset-right));
-  bottom: calc(1.1rem + env(safe-area-inset-bottom));
+  /* Extra clearance above the safe-area inset -- in a plain browser tab
+     (not installed as a standalone PWA) that inset is 0, which left the
+     button sitting right on top of the browser's own bottom toolbar. */
+  bottom: calc(3.25rem + env(safe-area-inset-bottom));
   z-index: 25;
 }
 .songsheet__fab-btn {
