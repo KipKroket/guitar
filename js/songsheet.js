@@ -342,6 +342,19 @@
 
   let scrollRAF = null;
   let scrollLastTs = null;
+  // Our own float target position, independent of what box.scrollTop
+  // reports back -- at low tempos the per-frame delta is well under 1px,
+  // and some mobile browsers (notably iOS Safari on a
+  // `-webkit-overflow-scrolling: touch` container) silently drop or
+  // coarsely round sub-pixel scrollTop writes, so accumulating by reading
+  // box.scrollTop back each frame never actually moved anywhere below a
+  // certain tempo. scrollPos keeps accumulating regardless of whether a
+  // given write "sticks"; scrollWritten is the last whole-pixel value we
+  // actually applied, and we only write again once scrollPos has drifted
+  // at least 1px past it -- so every write is a real, whole-pixel jump a
+  // picky scroll container can't silently ignore.
+  let scrollPos = null;
+  let scrollWritten = null;
   let scrollOutsideHandler = null;
 
   function scrollContainer() {
@@ -352,6 +365,8 @@
     if (scrollRAF != null) cancelAnimationFrame(scrollRAF);
     scrollRAF = null;
     scrollLastTs = null;
+    scrollPos = null;
+    scrollWritten = null;
   }
 
   function autoscrollTick(ts) {
@@ -370,10 +385,20 @@
       return;
     }
     const box = scrollContainer();
+    if (scrollPos == null) {
+      scrollPos = box.scrollTop;
+      scrollWritten = scrollPos;
+    }
     if (scrollLastTs != null) {
       const dt = (ts - scrollLastTs) / 1000;
-      box.scrollTop += levelToPxPerSec(state.autoscroll.speed) * dt;
-      if (box.scrollTop >= box.scrollHeight - box.clientHeight - 1) {
+      scrollPos += levelToPxPerSec(state.autoscroll.speed) * dt;
+      const rounded = Math.round(scrollPos);
+      if (rounded !== scrollWritten) {
+        if (box.scrollTo) box.scrollTo(0, rounded);
+        else box.scrollTop = rounded;
+        scrollWritten = rounded;
+      }
+      if (scrollPos >= box.scrollHeight - box.clientHeight - 1) {
         // Reached the bottom -- stop rather than sit there doing nothing.
         state.autoscroll.on = false;
         stopAutoscroll();
@@ -388,6 +413,8 @@
   function startAutoscroll() {
     if (scrollRAF != null) return;
     scrollLastTs = null;
+    scrollPos = null;
+    scrollWritten = null;
     scrollRAF = requestAnimationFrame(autoscrollTick);
   }
 
