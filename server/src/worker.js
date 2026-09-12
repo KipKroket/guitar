@@ -227,7 +227,8 @@ function ugPageData(store) {
 }
 
 async function ugSearchAndFetch(artist, title) {
-  const q = [artist, cleanTitle(title)].filter(Boolean).join(" ");
+  const cleanedTitle = cleanTitle(title);
+  const q = [artist, cleanedTitle].filter(Boolean).join(" ");
   const searchUrl =
     "https://www.ultimate-guitar.com/search.php?search_type=title&type%5B%5D=300&value=" +
     encodeURIComponent(q);
@@ -237,8 +238,39 @@ async function ugSearchAndFetch(artist, title) {
     (r) => r && r.tab_url && (r.type === "Chords" || r.type_name === "Chords")
   );
   if (!hits.length) throw new Error("no chord results");
-  hits.sort((a, b) => (b.votes || 0) * (b.rating || 0) - (a.votes || 0) * (a.rating || 0));
+
+  // Popularity alone (the old sort) picks the most-voted result even when
+  // it's the wrong song entirely -- a viral cover or a same-named different
+  // track can easily outvote the actual requested one. Score how well each
+  // hit's own title/artist matches what was asked for, and only fall back
+  // to popularity as a tiebreaker among comparably-matched hits.
+  const wantTitle = normKey(cleanedTitle);
+  const wantArtist = normKey(artist);
+  hits.forEach((r) => {
+    r._titleScore = tokenOverlap(wantTitle, normKey(cleanTitle(r.song_name || "")));
+    r._artistScore = wantArtist ? tokenOverlap(wantArtist, normKey(r.artist_name || "")) : 1;
+    r._popularity = Math.log((r.votes || 0) + 1) * Math.max(r.rating || 0, 0.1);
+  });
+  hits.sort((a, b) => {
+    const matchDiff = (b._titleScore * 2 + b._artistScore) - (a._titleScore * 2 + a._artistScore);
+    if (Math.abs(matchDiff) > 0.15) return matchDiff;
+    return b._popularity - a._popularity;
+  });
   return ugFromUrl(hits[0].tab_url, { artist, title });
+}
+
+// Word-overlap similarity (Dice coefficient) between two normKey()'d
+// strings -- cheap and robust enough to tell "the requested song" apart
+// from an unrelated but highly-voted result, without a string-distance
+// library. 0 when either side is empty (an unknown artist shouldn't
+// silently score as a perfect match).
+function tokenOverlap(a, b) {
+  const ta = new Set(String(a || "").split(" ").filter(Boolean));
+  const tb = new Set(String(b || "").split(" ").filter(Boolean));
+  if (!ta.size || !tb.size) return 0;
+  let shared = 0;
+  ta.forEach((t) => { if (tb.has(t)) shared++; });
+  return (2 * shared) / (ta.size + tb.size);
 }
 
 async function ugFromUrl(pageUrl, fallback) {

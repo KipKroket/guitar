@@ -671,6 +671,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   fill: currentColor;
 }
 
+/* Small "still learning" flag shown in the library list -- mirrors the state
+   set from the detail page's own learning button. */
+.song-item__learning {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--ember);
+  margin-right: -0.35rem;
+}
+.song-item__learning svg path:last-child { fill: currentColor; }
+
 .search-status {
   font-size: 0.85rem;
   color: var(--ink-soft);
@@ -757,17 +771,22 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 /* ---------- Overlays (search / song detail) ---------- */
 .overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Stops above the bottom nav (kept in-flow, not fixed -- see .bottom-nav)
+     instead of covering the full viewport, so the nav bar -- and its
+     "Library" button -- stays visible and tappable while a song's detail
+     page (or search) is open. --bottom-nav-h is measured in js/app.js;
+     the fallback only matters for the first paint before that JS runs. */
+  bottom: var(--bottom-nav-h, 4.75rem);
   z-index: 20;
   background: var(--bg);
   display: flex;
   flex-direction: column;
   max-width: 480px;
   margin: 0 auto;
-  /* Bottom padding needs real room past the home-indicator gesture strip --
-     a flat 1.5rem left the last button (Tabs) sitting right in that zone,
-     effectively unreachable on notched phones. */
-  padding: max(1rem, env(safe-area-inset-top)) 1.25rem calc(2.5rem + env(safe-area-inset-bottom));
+  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 1.5rem;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -779,7 +798,16 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  /* Sticky, not just top-of-flow -- stays reachable (and visible) no matter
+     how far the page/song content below it has been scrolled. The negative
+     margin + matching padding lets its background span edge-to-edge so
+     scrolled content doesn't show through beside it. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -1.25rem 1rem;
+  padding: 0 1.25rem 0.6rem;
+  background: var(--bg);
 }
 
 .overlay__back {
@@ -889,6 +917,12 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   margin: 0.15rem 0 1.4rem;
 }
 
+.song-detail__save-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .save-button {
   border: 1px solid var(--amber-deep);
   background: transparent;
@@ -908,6 +942,32 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 
 .save-button:active { transform: translateY(1px); }
+
+/* "Still learning" marker -- sits beside the save button, only shown once a
+   song is actually saved (matches detail-favorite-btn's own hidden rule). */
+.detail-learning-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.detail-learning-btn[hidden] { display: none; }
+.detail-learning-btn:active { transform: translateY(1px); }
+
+.detail-learning-btn[aria-pressed="true"] {
+  border-color: var(--ember);
+  color: var(--ember);
+  background: color-mix(in srgb, var(--ember) 14%, var(--surface));
+}
+.detail-learning-btn[aria-pressed="true"] svg path:last-child { fill: currentColor; }
 
 /* "Open in metronome" -- only shown once a tempo has been found. */
 .detail-metro-btn {
@@ -1179,33 +1239,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   color: var(--ink-soft);
 }
 
-.songsheet__scroll { position: relative; }
-.songsheet__scroll-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.songsheet__scroll-btn.is-active {
-  border-color: var(--amber-deep);
-  background: var(--amber);
-  color: var(--bg);
-}
-.songsheet__scroll-btn-label { font-weight: 600; }
-.songsheet__scroll-menu {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  left: 0;
-  z-index: 5;
-  width: 12rem;
-  padding: 0.85rem 0.9rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-}
 .songsheet__scroll-row {
   display: flex;
   align-items: center;
@@ -1243,16 +1276,18 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   accent-color: var(--amber);
 }
 
-/* Floating "while scrolling" control -- fixed to the viewport (a body-level
-   node, see js/songsheet.js) so it stays put and reachable no matter how
-   far the sheet has scrolled. Only rendered while autoscroll is running. */
+/* Floating autoscroll control -- fixed to the viewport (a body-level node,
+   see js/songsheet.js) so it stays put and reachable no matter how far the
+   sheet has scrolled. Shown any time the sheet panel is expanded and has
+   lyrics to scroll through (not just while autoscroll is actually running),
+   since it's now the only place to turn autoscroll on. */
 .songsheet__fab {
   position: fixed;
   right: calc(1.1rem + env(safe-area-inset-right));
-  /* Extra clearance above the safe-area inset -- in a plain browser tab
-     (not installed as a standalone PWA) that inset is 0, which left the
-     button sitting right on top of the browser's own bottom toolbar. */
-  bottom: calc(3.25rem + env(safe-area-inset-bottom));
+  /* Sits just above the bottom nav -- which stays visible/reachable while a
+     song's detail page is open, see .overlay -- rather than a guessed
+     offset, so it never sits on top of it regardless of device/safe-area. */
+  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem);
   z-index: 25;
 }
 .songsheet__fab-btn {
@@ -1262,14 +1297,23 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--amber-deep);
-  background: var(--amber);
-  color: var(--bg);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .songsheet__fab-btn:active { transform: translateY(1px); }
+/* Filled amber once autoscroll is actually running -- neutral/outline the
+   rest of the time, since the FAB is now shown whenever there's a sheet to
+   scroll through, not just while it's moving. */
+.songsheet__fab-btn.is-active {
+  border-color: var(--amber-deep);
+  background: var(--amber);
+  color: var(--bg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
 .songsheet__fab-menu {
   position: absolute;
   bottom: calc(100% + 0.6rem);
@@ -1386,6 +1430,40 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .ss-seg__lyric {
   font-size: 0.95rem;
   color: var(--ink);
+}
+
+/* Tappable inline chords -- opens the same small diagram as the chip row,
+   right next to the word (see .ss-chord-popover). */
+.ss-seg__chord--tap {
+  cursor: pointer;
+  border-radius: 3px;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: color-mix(in srgb, var(--amber-deep) 55%, transparent);
+  text-underline-offset: 2px;
+  -webkit-tap-highlight-color: transparent;
+}
+.ss-seg__chord--tap.is-active {
+  background: var(--amber);
+  color: var(--bg);
+  text-decoration: none;
+}
+
+/* The floating chord diagram opened by tapping an inline chord -- a
+   body-level fixed node (like the FAB) positioned in JS next to the tapped
+   chord, so it isn't clipped by the overlay's own overflow-y:auto. Content
+   (name/diagram/notes) comes from the same GuitarChords.renderInto() used
+   by the chip row and the chord book, via the shared .mini-chord__* rules. */
+.ss-chord-popover {
+  position: fixed;
+  z-index: 26;
+  width: 11rem;
+  padding: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  text-align: center;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
 }
 
 /* ---------- Settings ---------- */

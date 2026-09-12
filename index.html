@@ -197,7 +197,12 @@
           <h2 class="song-detail__title" id="detail-title"></h2>
           <p class="song-detail__artist" id="detail-artist"></p>
           <p class="song-detail__meta" id="detail-meta"></p>
-          <button id="detail-save-btn" class="save-button" type="button">Save to Library</button>
+          <div class="song-detail__save-row">
+            <button id="detail-save-btn" class="save-button" type="button">Save to Library</button>
+            <button id="detail-learning-btn" class="detail-learning-btn" type="button" aria-pressed="false" aria-label="Mark as still learning" hidden>
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4.2h10.5l-2.6 3.4 2.6 3.4H6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
 
           <!-- Full lyrics with the chords placed above the words. Collapsed by
                default; sits above the external Chords/Tabs links. Populated by

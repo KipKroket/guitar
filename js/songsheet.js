@@ -355,7 +355,6 @@
   // picky scroll container can't silently ignore.
   let scrollPos = null;
   let scrollWritten = null;
-  let scrollOutsideHandler = null;
 
   function scrollContainer() {
     return root.closest(".overlay") || document.scrollingElement || document.documentElement;
@@ -388,6 +387,14 @@
     if (scrollPos == null) {
       scrollPos = box.scrollTop;
       scrollWritten = scrollPos;
+    } else if (Math.abs(box.scrollTop - scrollWritten) > 1) {
+      // The container moved by more than our own last write -- a manual
+      // scroll (drag/wheel) to nudge the position, since nothing else writes
+      // to this scroll container while autoscroll owns it. Adopt it as the
+      // new base rather than snapping back, so a small correction just
+      // shifts where autoscroll continues from, at the same speed.
+      scrollPos = box.scrollTop;
+      scrollWritten = scrollPos;
     }
     if (scrollLastTs != null) {
       const dt = (ts - scrollLastTs) / 1000;
@@ -418,22 +425,15 @@
     scrollRAF = requestAnimationFrame(autoscrollTick);
   }
 
-  function closeScrollMenu() {
-    if (!state || !state.autoscroll || !state.autoscroll.menuOpen) return;
-    state.autoscroll.menuOpen = false;
-    if (scrollOutsideHandler) {
-      document.removeEventListener("pointerdown", scrollOutsideHandler, true);
-      scrollOutsideHandler = null;
-    }
-  }
-
-  /* ---- Floating "while scrolling" control -----------------------------
+  /* ---- Floating autoscroll control -------------------------------------
      A small round button pinned to the bottom-right of the viewport
      (position: fixed -- a plain child of <body>, not of #songsheet, so it
      isn't clipped by the overlay's own overflow-y:auto and stays put
-     regardless of scroll position), visible only while autoscroll is
-     actually running. Lets you change tempo or stop without having to
-     scroll back up to the toolbar. ---- */
+     regardless of scroll position). Shown whenever the sheet is expanded
+     and has lyrics to scroll through -- it's the only autoscroll control
+     now (the old toolbar toggle+menu is gone), so it has to be reachable
+     to turn autoscroll on in the first place, not just to adjust it once
+     running. Tap opens a small menu with the on/off toggle and tempo. ---- */
 
   let fab = null;
   let fabOutsideHandler = null;
@@ -447,9 +447,17 @@
     }
   }
 
+  // Transpose-invariant, so it's fine to check straight off the stored raw
+  // text without re-parsing through transposeModel.
+  function sheetHasLyrics(raw) {
+    return parseSheet(raw).sections.some((s) =>
+      s.lines.some((l) => l && l.lyric && l.lyric.trim())
+    );
+  }
+
   function renderFab() {
     const show = !!(
-      state && state.expanded && state.record && !state.adding && state.autoscroll.on
+      state && state.expanded && state.record && !state.adding && sheetHasLyrics(state.record.raw)
     );
     if (!show) {
       closeFabMenu();
@@ -469,7 +477,8 @@
     btn.type = "button";
     btn.setAttribute("aria-haspopup", "true");
     btn.setAttribute("aria-expanded", state.autoscroll.fabMenuOpen ? "true" : "false");
-    btn.setAttribute("aria-label", "Autoscroll instellingen");
+    btn.setAttribute("aria-label", "Autoscroll");
+    if (state.autoscroll.on) btn.classList.add("is-active");
     btn.innerHTML =
       '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     btn.addEventListener("click", (e) => {
@@ -495,6 +504,20 @@
     if (state.autoscroll.fabMenuOpen) {
       const menu = el("div", "songsheet__fab-menu");
 
+      const toggleRow = el("label", "songsheet__scroll-row");
+      toggleRow.appendChild(el("span", null, "Autoscroll"));
+      const toggle = el("input", "songsheet__scroll-toggle");
+      toggle.type = "checkbox";
+      toggle.checked = state.autoscroll.on;
+      toggle.addEventListener("change", () => {
+        state.autoscroll.on = toggle.checked;
+        if (state.autoscroll.on) startAutoscroll();
+        else stopAutoscroll();
+        renderFab();
+      });
+      toggleRow.appendChild(toggle);
+      menu.appendChild(toggleRow);
+
       const speedWrap = el("label", "songsheet__scroll-speed");
       const speedHead = el("div", "songsheet__scroll-speed-head");
       speedHead.appendChild(el("span", null, "Tempo"));
@@ -514,19 +537,6 @@
       speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
       speedWrap.appendChild(speed);
       menu.appendChild(speedWrap);
-
-      const stop = el(
-        "button",
-        "songsheet__btn songsheet__btn--sm songsheet__btn--danger songsheet__fab-stop",
-        "Stop autoscroll"
-      );
-      stop.type = "button";
-      stop.addEventListener("click", () => {
-        state.autoscroll.on = false;
-        stopAutoscroll();
-        render();
-      });
-      menu.appendChild(stop);
 
       fab.appendChild(menu);
     }
@@ -561,7 +571,7 @@
       fetching: false,
       fetchError: null,
       confirmRemove: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), menuOpen: false, fabMenuOpen: false },
+      autoscroll: { on: false, speed: loadScrollSpeed(), fabMenuOpen: false },
     };
     root.hidden = false;
     render();
@@ -569,7 +579,7 @@
 
   function close() {
     stopAutoscroll();
-    closeScrollMenu();
+    closeInlineChordPopover();
     state = null;
     panel = null;
     renderFab();
@@ -578,6 +588,7 @@
   }
 
   function render() {
+    closeInlineChordPopover();
     if (!state) {
       renderFab();
       return;
@@ -802,12 +813,8 @@
        the primary row (autoscroll, edit) stays put; transpose and remove
        are secondary, so they sit in a quieter row underneath. ---- */
     const bar = el("div", "songsheet__bar");
-    const hasLyrics = shown.sections.some((s) =>
-      s.lines.some((l) => l && l.lyric && l.lyric.trim())
-    );
 
     const primaryRow = el("div", "songsheet__bar-row");
-    if (hasLyrics) primaryRow.appendChild(buildScrollControl());
     if (!state.confirmRemove) {
       const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
       edit.type = "button";
@@ -935,89 +942,90 @@
     }
   }
 
-  // The autoscroll button + its popover menu (on/off, tempo). Only ever
-  // built when the sheet actually has lyric text to scroll through.
-  function buildScrollControl() {
-    const wrap = el("div", "songsheet__scroll");
+  /* ---- Tap-a-chord preview ----------------------------------------------
+     Tapping a chord inline (above the lyric it goes with) shows the same
+     small diagram as the chip row, floating right next to the word --
+     dismissed by tapping anywhere else on the page. A body-level fixed node
+     (like the FAB), so it isn't clipped by the overlay's own
+     overflow-y:auto and can be positioned in plain viewport coordinates. ---- */
+  let inlineChordCard = null;
+  let inlineChordAnchor = null;
+  let inlineChordOutsideHandler = null;
+  let inlineChordScrollHandler = null;
 
-    const btn = el("button", "songsheet__btn songsheet__btn--sm songsheet__scroll-btn", null);
-    btn.type = "button";
-    btn.setAttribute("aria-haspopup", "true");
-    btn.setAttribute("aria-expanded", state.autoscroll.menuOpen ? "true" : "false");
-    if (state.autoscroll.on) btn.classList.add("is-active");
-    // Double chevron = "keeps going down on its own", clearer at a glance
-    // than a single arrow (which reads as a plain scroll-to-bottom action).
-    btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    btn.appendChild(el("span", "songsheet__scroll-btn-label", "Autoscroll"));
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (state.autoscroll.menuOpen) {
-        closeScrollMenu();
-        render();
-        return;
-      }
-      state.autoscroll.menuOpen = true;
-      render();
-      // Registered after this click has finished bubbling, so the same tap
-      // that opened the menu doesn't also close it via the outside handler.
-      setTimeout(() => {
-        if (!state || !state.autoscroll.menuOpen) return;
-        // Matched by class, not by node reference -- render() may have
-        // rebuilt the menu (a fresh wrap/btn) by the time this fires.
-        scrollOutsideHandler = (ev) => {
-          if (!ev.target.closest || !ev.target.closest(".songsheet__scroll")) {
-            closeScrollMenu();
-            render();
-          }
-        };
-        document.addEventListener("pointerdown", scrollOutsideHandler, true);
-      }, 0);
-    });
-    wrap.appendChild(btn);
-
-    if (state.autoscroll.menuOpen) {
-      const menu = el("div", "songsheet__scroll-menu");
-
-      const toggleRow = el("label", "songsheet__scroll-row");
-      toggleRow.appendChild(el("span", null, "Autoscroll"));
-      const toggle = el("input", "songsheet__scroll-toggle");
-      toggle.type = "checkbox";
-      toggle.checked = state.autoscroll.on;
-      toggle.addEventListener("change", () => {
-        state.autoscroll.on = toggle.checked;
-        if (state.autoscroll.on) startAutoscroll();
-        else stopAutoscroll();
-        btn.classList.toggle("is-active", state.autoscroll.on);
-        renderFab();
-      });
-      toggleRow.appendChild(toggle);
-      menu.appendChild(toggleRow);
-
-      const speedWrap = el("label", "songsheet__scroll-speed");
-      const speedHead = el("div", "songsheet__scroll-speed-head");
-      speedHead.appendChild(el("span", null, "Tempo"));
-      const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
-      speedHead.appendChild(speedVal);
-      speedWrap.appendChild(speedHead);
-      const speed = el("input", null);
-      speed.type = "range";
-      speed.min = "1";
-      speed.max = "10";
-      speed.step = "1";
-      speed.value = String(state.autoscroll.speed);
-      speed.addEventListener("input", () => {
-        state.autoscroll.speed = parseInt(speed.value, 10);
-        speedVal.textContent = speed.value;
-      });
-      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
-      speedWrap.appendChild(speed);
-      menu.appendChild(speedWrap);
-
-      wrap.appendChild(menu);
+  function closeInlineChordPopover() {
+    if (inlineChordAnchor) inlineChordAnchor.classList.remove("is-active");
+    inlineChordAnchor = null;
+    if (inlineChordCard) {
+      inlineChordCard.remove();
+      inlineChordCard = null;
     }
+    if (inlineChordOutsideHandler) {
+      document.removeEventListener("pointerdown", inlineChordOutsideHandler, true);
+      inlineChordOutsideHandler = null;
+    }
+    if (inlineChordScrollHandler) {
+      const box = scrollContainer();
+      if (box) box.removeEventListener("scroll", inlineChordScrollHandler);
+      inlineChordScrollHandler = null;
+    }
+  }
 
-    return wrap;
+  function toggleInlineChordPopover(anchorEl, sym) {
+    if (inlineChordAnchor === anchorEl) {
+      closeInlineChordPopover();
+      return;
+    }
+    closeInlineChordPopover();
+
+    const card = el("div", "ss-chord-popover");
+    document.body.appendChild(card);
+    const ok = window.GuitarChords && window.GuitarChords.renderInto
+      ? window.GuitarChords.renderInto(card, sym)
+      : false;
+    if (!ok && !card.textContent) card.textContent = "No diagram for " + sym + ".";
+
+    // Prefer just below the chord; flip above if that would run off the
+    // bottom, and clamp horizontally so it never runs off either side.
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const margin = 8;
+    let left = Math.min(anchorRect.left, window.innerWidth - cardRect.width - margin);
+    left = Math.max(margin, left);
+    let top = anchorRect.bottom + 6;
+    if (top + cardRect.height > window.innerHeight - margin) {
+      top = anchorRect.top - cardRect.height - 6;
+    }
+    card.style.left = left + "px";
+    card.style.top = Math.max(margin, top) + "px";
+
+    anchorEl.classList.add("is-active");
+    inlineChordCard = card;
+    inlineChordAnchor = anchorEl;
+
+    // Registered after this click has finished bubbling (same trick as the
+    // FAB menu), so the tap that opened the card doesn't also close it.
+    setTimeout(() => {
+      if (inlineChordAnchor !== anchorEl) return;
+      inlineChordOutsideHandler = (ev) => {
+        if (!ev.target.closest) return;
+        // Tapping the popover itself, or any chord (the same one -> close,
+        // a different one -> switch), is handled by the chord's own click
+        // handler above -- only a tap genuinely elsewhere closes it here.
+        if (ev.target.closest(".ss-chord-popover") || ev.target.closest(".ss-seg__chord--tap")) return;
+        closeInlineChordPopover();
+      };
+      document.addEventListener("pointerdown", inlineChordOutsideHandler, true);
+    }, 0);
+
+    // The card is positioned in fixed viewport coordinates, so it would
+    // drift away from its chord as soon as the sheet (or autoscroll) moves --
+    // simplest to just close it rather than re-track the anchor every frame.
+    const box = scrollContainer();
+    if (box) {
+      inlineChordScrollHandler = () => closeInlineChordPopover();
+      box.addEventListener("scroll", inlineChordScrollHandler, { passive: true });
+    }
   }
 
   // Split a lyric string at each chord index; each piece carries the chord
@@ -1057,6 +1065,15 @@
       // notation like "| G D | Am7 |") get gaps punched mid-word.
       if (ch.sym.length >= Math.max(piece.replace(/\s+$/, "").length, 1)) {
         chordEl.classList.add("ss-seg__chord--pad");
+      }
+      // Real chord symbols only -- bar lines / "N.C." / repeat marks stay
+      // plain text, same filter as the chip row's uniqueChords().
+      if (/^[A-G]/.test(ch.sym.trim())) {
+        chordEl.classList.add("ss-seg__chord--tap");
+        chordEl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleInlineChordPopover(chordEl, ch.sym);
+        });
       }
       seg.appendChild(chordEl);
       seg.appendChild(el("span", "ss-seg__lyric", piece));

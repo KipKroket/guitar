@@ -33,6 +33,42 @@
   const NEAR_EXIT_CENTS = 20;      // only leave the "near" zone once this far off again (hysteresis)
   const DIRECTION_DEBOUNCE_MS = 350; // how long a direction must hold before the hint switches
 
+  /* ---------- Bottom nav height (for the overlays -- see .overlay in CSS) ---------- */
+  // The overlays (search / song detail) stop above the bottom nav instead of
+  // covering it, so the nav stays reachable while a song is open. They read
+  // this custom property rather than a guessed fixed height, since the nav's
+  // real height depends on the device's safe-area inset.
+  const bottomNavEl = document.querySelector(".bottom-nav");
+  function syncBottomNavHeight() {
+    if (!bottomNavEl) return;
+    document.documentElement.style.setProperty("--bottom-nav-h", bottomNavEl.offsetHeight + "px");
+  }
+  syncBottomNavHeight();
+  window.addEventListener("resize", syncBottomNavHeight);
+  if (bottomNavEl && window.ResizeObserver) new ResizeObserver(syncBottomNavHeight).observe(bottomNavEl);
+
+  /* ---------- Screen wake lock ---------- */
+  // Keep the screen on for as long as the app is open, on any tab -- tuning,
+  // following a lyrics sheet, or just leaving the metronome running are all
+  // things you look at rather than touch, so the OS's normal auto-lock is
+  // exactly the wrong default here. Re-acquired on visibilitychange because
+  // the OS releases the lock whenever the tab/app is backgrounded, and a
+  // lock can only be requested again once the page is visible again.
+  let wakeLock = null;
+  async function requestWakeLock() {
+    if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } catch (err) {
+      /* denied, unsupported, or backgrounded mid-request -- nothing to do */
+    }
+  }
+  requestWakeLock();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !wakeLock) requestWakeLock();
+  });
+
   /* ---------- Navigation ---------- */
   const navButtons = document.querySelectorAll(".nav-btn");
   const pages = document.querySelectorAll(".page");
@@ -158,7 +194,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "23";
+  const BUILD = "24";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 

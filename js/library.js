@@ -52,6 +52,7 @@
   const detailArtist = document.getElementById("detail-artist");
   const detailMeta = document.getElementById("detail-meta");
   const detailSaveBtn = document.getElementById("detail-save-btn");
+  const detailLearningBtn = document.getElementById("detail-learning-btn");
   const detailFavBtn = document.getElementById("detail-favorite-btn");
   const detailChordLinks = document.getElementById("detail-chord-links");
   const detailChordSub = document.getElementById("chord-links-sub");
@@ -162,6 +163,15 @@
       li.appendChild(favBtn);
     }
 
+    if (withFavStar && song.learning) {
+      const learningBadge = document.createElement("span");
+      learningBadge.className = "song-item__learning";
+      learningBadge.setAttribute("aria-label", "Still learning");
+      learningBadge.innerHTML =
+        '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4.2h10.5l-2.6 3.4 2.6 3.4H6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+      li.appendChild(learningBadge);
+    }
+
     const img = document.createElement("img");
     img.className = "song-item__art";
     img.loading = "lazy";
@@ -202,6 +212,18 @@
     renderLibraryList();
     if (currentDetailId === id) {
       detailFavBtn.setAttribute("aria-pressed", entry.favorite ? "true" : "false");
+    }
+  }
+
+  function toggleLearning(id) {
+    const entry = findEntry(id);
+    if (!entry) return;
+    entry.learning = !entry.learning;
+    entry.updatedAt = Date.now();
+    commit();
+    renderLibraryList();
+    if (currentDetailId === id) {
+      detailLearningBtn.setAttribute("aria-pressed", entry.learning ? "true" : "false");
     }
   }
 
@@ -555,6 +577,7 @@
     detailSaveBtn.classList.toggle("is-saved", isSaved);
     detailSaveBtn.textContent = isSaved ? "Saved · Tap to remove" : "Save to Library";
     detailFavBtn.hidden = !isSaved;
+    detailLearningBtn.hidden = !isSaved;
   }
 
   function openDetail(song) {
@@ -603,6 +626,7 @@
 
     updateSaveButton(saved);
     detailFavBtn.setAttribute("aria-pressed", currentDetailSong.favorite ? "true" : "false");
+    detailLearningBtn.setAttribute("aria-pressed", currentDetailSong.learning ? "true" : "false");
 
     detailOverlay.hidden = false;
     closeSearch();
@@ -676,16 +700,20 @@
     toggleFavorite(currentDetailId);
   });
 
-  // If the user switches to another tab (Tuner/Metronome/Settings) while a
-  // search or detail overlay is open, close it -- otherwise it would still
-  // be sitting open, hidden behind the other page, the next time they come
-  // back to Library.
+  detailLearningBtn.addEventListener("click", () => {
+    if (!currentDetailId) return;
+    toggleLearning(currentDetailId);
+  });
+
+  // Any bottom-nav tap closes a search/detail overlay if one is open --
+  // including "Library" itself, so it always drops you back to the plain
+  // library list rather than leaving a song's detail page sitting open on
+  // top of it (the overlay stays visible above the nav bar now, so it's
+  // reachable mid-song -- see .overlay's CSS).
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      if (btn.dataset.target !== "library") {
-        closeSearch();
-        closeDetail();
-      }
+      closeSearch();
+      closeDetail();
     });
   });
 
