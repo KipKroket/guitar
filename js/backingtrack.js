@@ -173,7 +173,7 @@
     const seekBar = window.GuitarAudioDock.wireSeekBar(progress, progressFill, time, {
       getDuration: () => dur,
       onSeek: (sec) => ytPlayer && ytPlayer.seekTo(sec, true),
-      formatTime,
+      formatTime: (sec) => formatTime(sec) + " / " + formatTime(dur),
     });
     function renderPlaying(isPlaying) {
       playPause.classList.toggle("is-playing", isPlaying);
@@ -187,7 +187,7 @@
       if (seekBar.isDragging()) return; // don't fight the drag preview
       const pos = ytPlayer.getCurrentTime() || 0;
       progressFill.style.width = (dur ? Math.min(100, (pos / dur) * 100) : 0) + "%";
-      time.textContent = formatTime(pos);
+      time.textContent = formatTime(pos) + " / " + formatTime(dur);
     }
 
     playPause.addEventListener("click", () => {
@@ -203,13 +203,16 @@
         videoId,
         width: "100%",
         height: "100%",
-        playerVars: { playsinline: 1, controls: 0, autoplay: 1, rel: 0, modestbranding: 1 },
+        // autoplay:0 -- opening the bar cues the video, playback only
+        // starts once the play button is actually tapped.
+        playerVars: { playsinline: 1, controls: 0, autoplay: 0, rel: 0, modestbranding: 1 },
         events: {
           onReady: () => {
             status.hidden = true;
             playPause.hidden = false;
             progress.hidden = false;
             time.hidden = false;
+            tick(); // duration (and 0:00) is available as soon as it's cued, not just once playing starts
           },
           onStateChange: (e) => {
             const playing = e.data === YT.PlayerState.PLAYING;

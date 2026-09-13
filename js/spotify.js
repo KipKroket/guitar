@@ -159,7 +159,20 @@
   let deviceId = null;
   let playerPromise = null;
   let lastState = null; // most recent player_state_changed payload
+  let lastStateAt = 0; // Date.now() when lastState arrived -- see posTicker
   let onStateChange = null; // set by the open panel while it's on screen
+  // player_state_changed only fires on notable events (play/pause/seek/track
+  // change), not on a steady clock -- without this the bar's clock just sat
+  // frozen between those events instead of visibly counting up. Ticks by
+  // interpolating from lastState/lastStateAt rather than polling the SDK
+  // (there's no getCurrentTime()-style call on it).
+  let posTicker = null;
+  function stopPosTicker() {
+    if (posTicker != null) {
+      clearInterval(posTicker);
+      posTicker = null;
+    }
+  }
 
   function ensurePlayer() {
     if (playerPromise) return playerPromise;
@@ -182,6 +195,7 @@
           });
           player.addListener("player_state_changed", (state) => {
             lastState = state;
+            lastStateAt = Date.now();
             if (onStateChange) onStateChange(state);
           });
           player.addListener("initialization_error", ({ message }) => reject(new Error(message)));
@@ -333,14 +347,25 @@
 
     let started = false;
     let lastDur = 0;
+    // playSong() below starts playback immediately (the Web API's /play
+    // endpoint has no "load but don't play" mode) -- armed until the first
+    // genuinely-playing state comes back, at which point it's paused right
+    // back, so opening the bar *loads* the track rather than launching into
+    // it. A brief flash of audio during that round-trip is the tradeoff.
+    let autoPauseArmed = true;
     const seekBar = window.GuitarAudioDock.wireSeekBar(progress, progressFill, time, {
       getDuration: () => lastDur,
       onSeek: (ms) => seekTo(ms),
-      formatTime,
+      formatTime: (ms) => formatTime(ms) + " / " + formatTime(lastDur),
     });
 
     function renderState(state) {
       if (!state) return;
+      if (autoPauseArmed && !state.paused) {
+        autoPauseArmed = false;
+        pause();
+        return; // the pause() call re-fires this listener with paused:true
+      }
       status.hidden = true;
       playPause.hidden = false;
       progress.hidden = false;
@@ -352,12 +377,22 @@
         : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" fill="currentColor"/></svg>';
       const dur = (state.duration || state.track_window.current_track.duration_ms) || 0;
       lastDur = dur;
-      // Skip while the user's finger is still on the scrub bar -- the SDK's
-      // own (still-old) position would otherwise fight the drag preview.
-      if (seekBar.isDragging()) return;
-      const pct = dur ? Math.min(100, (state.position / dur) * 100) : 0;
+      stopPosTicker();
+      if (!state.paused) posTicker = setInterval(renderTick, 400);
+      renderTick();
+    }
+
+    // Interpolates from the last known state rather than re-reading it --
+    // player_state_changed doesn't fire on a steady clock, so this is what
+    // actually makes the displayed time count up while playing.
+    function renderTick() {
+      if (seekBar.isDragging() || !lastState) return; // don't fight the drag preview
+      const dur = lastDur;
+      const pos = lastState.paused ? lastState.position : lastState.position + (Date.now() - lastStateAt);
+      const clamped = dur ? Math.min(dur, pos) : pos;
+      const pct = dur ? Math.min(100, (clamped / dur) * 100) : 0;
       progressFill.style.width = pct + "%";
-      time.textContent = formatTime(state.position);
+      time.textContent = formatTime(clamped) + " / " + formatTime(dur);
     }
 
     onStateChange = renderState;
@@ -429,6 +464,7 @@
       }
       window.GuitarAudioDock.showNowPlaying("spotify", buildNowPlayingBar(ctx.song), () => {
         onStateChange = null;
+        stopPosTicker();
         pause();
       });
     });

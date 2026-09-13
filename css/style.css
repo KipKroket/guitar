@@ -1423,16 +1423,26 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   flex: 1;
   height: 6px;
   border-radius: 3px;
-  background: var(--line);
+  /* var(--line) reads as almost the same tone as the bar's own background
+     in both themes -- not enough contrast to look like a track rather than
+     empty space, which is what made this look like a bare dot floating on
+     nothing. --ink-soft has real contrast against --surface/--bg. */
+  background: var(--ink-soft);
+  opacity: 0.35;
   cursor: pointer;
   touch-action: none; /* this element owns vertical drags too, for scrubbing */
-  /* A little extra hit area above/below the thin visible track, via a
-     transparent border -- easier to tap/drag accurately on a phone without
-     making the bar itself look thicker. */
-  border-top: 10px solid transparent;
-  border-bottom: 10px solid transparent;
-  background-clip: padding-box;
-  margin: -10px 0;
+}
+/* A transparent pseudo-element stretches the actual draggable/tappable
+   area well above and below the thin 6px track -- easier to grab
+   accurately on a phone -- without changing how thick the track itself
+   looks or fighting background-clip to keep the visible bar thin. */
+.audio-dock__progress::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  left: 0;
+  right: 0;
 }
 .audio-dock__progress-fill {
   position: absolute;
@@ -1464,6 +1474,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ---- Persistent now-playing bar -----------------------------------------
