@@ -587,14 +587,34 @@
     state = null;
     panel = null;
     renderFab();
+    dispatchExpandEvent();
     root.hidden = true;
     root.textContent = "";
+  }
+
+  // js/audiodock.js (the Spotify + backing-track pill) and js/library.js
+  // (hiding Chords/Tabs + the metronome button) both react to this -- fired
+  // from render() so it also catches a sheet going from empty to having
+  // lyrics while already expanded, not just the expand/collapse toggle
+  // itself.
+  function dispatchExpandEvent() {
+    document.dispatchEvent(
+      new CustomEvent("songsheetexpand", {
+        detail: {
+          expanded: !!(state && state.expanded),
+          song: state ? state.song : null,
+          inst: state ? state.inst : null,
+          hasLyrics: !!(state && state.record && sheetHasLyrics(state.record.raw)),
+        },
+      })
+    );
   }
 
   function render() {
     closeInlineChordPopover();
     if (!state) {
       renderFab();
+      dispatchExpandEvent();
       return;
     }
     root.textContent = "";
@@ -602,6 +622,7 @@
 
     root.appendChild(buildToggle());
     renderFab();
+    dispatchExpandEvent();
     if (!state.expanded) return;
 
     panel = el("div", "songsheet__panel");

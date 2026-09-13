@@ -61,7 +61,19 @@
   const songLinksEl = document.getElementById("song-links");
   const detailMetronomeBtn = document.getElementById("detail-metronome-btn");
   const detailBpmValue = document.getElementById("detail-bpm-value");
-  const detailSpotifyBtn = document.getElementById("detail-spotify-btn");
+
+  // Chords/Tabs links and the metronome button both hide while the lyrics
+  // panel is expanded (see the "songsheetexpand" listener below) -- each has
+  // its own other reason to be hidden (custom song / no tempo found yet), so
+  // track those separately and recompute the combined visibility whenever
+  // either changes.
+  let currentIsCustom = false;
+  let metronomeAvailable = false;
+  let lyricsExpanded = false;
+  function refreshExpandableVisibility() {
+    songLinksEl.hidden = currentIsCustom || lyricsExpanded;
+    detailMetronomeBtn.hidden = !metronomeAvailable || lyricsExpanded;
+  }
 
   const customToggle = document.getElementById("custom-song-toggle");
   const customForm = document.getElementById("custom-song-form");
@@ -224,6 +236,24 @@
     renderLibraryList();
     if (currentDetailId === id) {
       detailLearningBtn.setAttribute("aria-pressed", entry.learning ? "true" : "false");
+    }
+  }
+
+  // Used by js/spotify.js and js/backingtrack.js to remember a resolved
+  // Spotify track id / a pasted backing-track link on the song itself, the
+  // same way favorite/learning are stored -- so it rides along with
+  // export/import and cloud sync automatically (see mergeSnapshots below).
+  // A song that hasn't been saved yet has nowhere to persist this, so it's
+  // just applied to the in-memory detail object for the current viewing
+  // instead (same tradeoff as favorite/learning, which are hidden entirely
+  // until a song is saved).
+  function setSongField(id, patch) {
+    const entry = findEntry(id);
+    if (entry) {
+      Object.assign(entry, patch, { updatedAt: Date.now() });
+      commit();
+    } else if (currentDetailSong && currentDetailSong.id === id) {
+      Object.assign(currentDetailSong, patch);
     }
   }
 
@@ -588,7 +618,8 @@
     const custom = Boolean(currentDetailSong.custom);
     const mySeq = ++detailSeq;
     detailBpm = null;
-    detailMetronomeBtn.hidden = true;
+    metronomeAvailable = false;
+    refreshExpandableVisibility();
 
     detailArt.src = song.artworkUrl || FALLBACK_ART;
     detailArt.onerror = () => { detailArt.onerror = null; detailArt.src = FALLBACK_ART; };
@@ -597,16 +628,10 @@
     detailArtist.hidden = !song.artist;
     setDetailMeta(null);
 
-    // Opens the track in the Spotify app (or web player) via a search deep
-    // link -- we only have iTunes metadata, not a Spotify track id, and
-    // resolving one needs an authenticated API. Works for custom songs too.
-    const spotifyQuery = `${song.artist || ""} ${cleanTitleForSearch(song.title)}`.trim();
-    detailSpotifyBtn.href =
-      "https://open.spotify.com/search/" + encodeURIComponent(spotifyQuery);
-
     // Custom songs have no external chord/tab pages and no catalogue tempo --
     // the detail view is then just art + title + save/remove.
-    songLinksEl.hidden = custom;
+    currentIsCustom = custom;
+    refreshExpandableVisibility();
     if (!custom) {
       const linkQuery = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
       const piano = currentInstrument() === "piano";
@@ -645,7 +670,8 @@
         detailBpm = bpm;
         detailBpmValue.textContent = String(bpm);
         setDetailMeta(bpm);
-        detailMetronomeBtn.hidden = false;
+        metronomeAvailable = true;
+        refreshExpandableVisibility();
       });
     }
   }
@@ -726,6 +752,16 @@
     library = loadSongs(currentInstrument());
     tombstones = loadTombs(currentInstrument());
     renderLibraryList();
+  });
+
+  // js/songsheet.js dispatches this whenever the lyrics panel's expanded
+  // state changes (open/collapse, or the detail page closing). While
+  // expanded, the Chords/Tabs links and the metronome button get out of the
+  // way -- there's nothing below the lyrics to scroll to any more, which is
+  // what keeps scrolling from running past the end of the sheet.
+  document.addEventListener("songsheetexpand", (e) => {
+    lyricsExpanded = Boolean(e.detail && e.detail.expanded);
+    refreshExpandableVisibility();
   });
 
   /* ---------- Merge, snapshots, backup ---------- */
@@ -833,8 +869,9 @@
     );
   }
 
-  // Exposed for js/sync.js (optional cloud sync).
-  window.GuitarLibrary = { getAllSnapshot, applySnapshot };
+  // Exposed for js/sync.js (optional cloud sync) and js/spotify.js /
+  // js/backingtrack.js (setSongField).
+  window.GuitarLibrary = { getAllSnapshot, applySnapshot, setSongField };
 
   /* ---------- Backup buttons (Settings) ---------- */
   const exportBtn = document.getElementById("export-btn");
