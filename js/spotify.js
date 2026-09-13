@@ -238,6 +238,9 @@
   function stop() {
     pause();
   }
+  function seekTo(ms) {
+    if (player) player.seek(Math.max(0, ms | 0)).catch(() => {});
+  }
 
   /* ---------- Fallback search link (unchanged from the old header button) ---------- */
   function fallbackUrl(song) {
@@ -259,92 +262,17 @@
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
 
-  function buildPanel(song) {
+  // Setup-only popover: shown while logged out, so login (and the fallback
+  // link) has somewhere to live. Once logged in, tapping the dock button
+  // skips this entirely and goes straight to the now-playing bar below --
+  // playback controls never live in a card floating over the lyrics.
+  function buildLoginPanel(song) {
     const panel = el("div", "audio-dock__panel");
-
-    if (!isLoggedIn()) {
-      panel.appendChild(el("p", "audio-dock__hint", "Log in met je eigen Spotify-account om dit nummer hier af te spelen."));
-      const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Inloggen met Spotify");
-      loginBtn.type = "button";
-      loginBtn.addEventListener("click", () => login());
-      panel.appendChild(loginBtn);
-      panel.appendChild(fallbackLink(song));
-      return panel;
-    }
-
-    const status = el("p", "audio-dock__status", "Verbinden…");
-    panel.appendChild(status);
-
-    const head = el("div", "audio-dock__track");
-    const art = el("img", "audio-dock__art");
-    art.alt = "";
-    art.src = song.artworkUrl || "";
-    head.appendChild(art);
-    const meta = el("div", "audio-dock__track-meta");
-    meta.appendChild(el("div", "audio-dock__track-title", song.title));
-    meta.appendChild(el("div", "audio-dock__track-artist", song.artist || ""));
-    head.appendChild(meta);
-    panel.appendChild(head);
-    head.hidden = true;
-
-    const controls = el("div", "audio-dock__controls");
-    const playPause = el("button", "audio-dock__playpause", "");
-    playPause.type = "button";
-    playPause.setAttribute("aria-label", "Play/pause");
-    playPause.innerHTML =
-      '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>';
-    playPause.disabled = true;
-    controls.appendChild(playPause);
-    const progress = el("div", "audio-dock__progress");
-    const progressFill = el("div", "audio-dock__progress-fill");
-    progress.appendChild(progressFill);
-    controls.appendChild(progress);
-    const time = el("span", "audio-dock__time", "0:00");
-    controls.appendChild(time);
-    panel.appendChild(controls);
-    controls.hidden = true;
-
-    let started = false;
-
-    function renderState(state) {
-      if (!state) return;
-      head.hidden = false;
-      controls.hidden = false;
-      status.hidden = true;
-      playPause.disabled = false;
-      playPause.classList.toggle("is-playing", !state.paused);
-      playPause.innerHTML = state.paused
-        ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" fill="currentColor"/></svg>';
-      const dur = (state.duration || state.track_window.current_track.duration_ms) || 0;
-      const pct = dur ? Math.min(100, (state.position / dur) * 100) : 0;
-      progressFill.style.width = pct + "%";
-      time.textContent = formatTime(state.position) + " / " + formatTime(dur);
-    }
-
-    onStateChange = renderState;
-
-    playPause.addEventListener("click", () => {
-      if (!player) return;
-      if (!started) return; // still connecting -- ignore stray taps
-      player.togglePlay().catch(() => {});
-    });
-
-    playSong(song)
-      .then(() => {
-        started = true;
-        if (lastState) renderState(lastState);
-      })
-      .catch((err) => {
-        status.hidden = false;
-        status.classList.add("audio-dock__status--error");
-        status.textContent =
-          (err && err.message === "not-logged-in"
-            ? "Log opnieuw in."
-            : (err && err.message) || "Afspelen is niet gelukt.") +
-          " Je kunt het nummer ook in de echte app openen.";
-      });
-
+    panel.appendChild(el("p", "audio-dock__hint", "Log in met je eigen Spotify-account om dit nummer hier af te spelen."));
+    const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Inloggen met Spotify");
+    loginBtn.type = "button";
+    loginBtn.addEventListener("click", () => login());
+    panel.appendChild(loginBtn);
     panel.appendChild(fallbackLink(song));
     return panel;
   }
@@ -355,6 +283,122 @@
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     return a;
+  }
+
+  // The persistent now-playing bar (js/audiodock.js's showNowPlaying) --
+  // slim on purpose: art thumbnail, play/pause, a tap-to-seek progress
+  // track, time, and a close button. No title/artist text -- the point is
+  // to stay out of the way of the lyrics, not to restate what's already on
+  // the song detail page above it.
+  function buildNowPlayingBar(song) {
+    // A fragment, not a wrapping div -- these need to be direct children of
+    // .audio-dock__bar (the flex row created by js/audiodock.js) themselves,
+    // not nested inside another box.
+    const bar = document.createDocumentFragment();
+
+    const art = el("img", "audio-dock__bar-thumb");
+    art.alt = "";
+    art.src = song.artworkUrl || "";
+    bar.appendChild(art);
+
+    const status = el("p", "audio-dock__bar-status", "Verbinden…");
+    bar.appendChild(status);
+
+    const playPause = el("button", "audio-dock__playpause", "");
+    playPause.type = "button";
+    playPause.setAttribute("aria-label", "Play/pause");
+    playPause.innerHTML =
+      '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>';
+    playPause.disabled = true;
+    playPause.hidden = true;
+    bar.appendChild(playPause);
+
+    const progress = el("div", "audio-dock__progress");
+    const progressFill = el("div", "audio-dock__progress-fill");
+    progress.appendChild(progressFill);
+    progress.hidden = true;
+    bar.appendChild(progress);
+
+    const time = el("span", "audio-dock__time", "0:00");
+    time.hidden = true;
+    bar.appendChild(time);
+
+    const close = el("button", "audio-dock__bar-close", "");
+    close.type = "button";
+    close.setAttribute("aria-label", "Stoppen");
+    close.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    close.addEventListener("click", () => window.GuitarAudioDock.hideNowPlaying());
+    bar.appendChild(close);
+
+    let started = false;
+    let lastDur = 0;
+
+    function renderState(state) {
+      if (!state) return;
+      status.hidden = true;
+      playPause.hidden = false;
+      progress.hidden = false;
+      time.hidden = false;
+      playPause.disabled = false;
+      playPause.classList.toggle("is-playing", !state.paused);
+      playPause.innerHTML = state.paused
+        ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" fill="currentColor"/></svg>';
+      const dur = (state.duration || state.track_window.current_track.duration_ms) || 0;
+      lastDur = dur;
+      const pct = dur ? Math.min(100, (state.position / dur) * 100) : 0;
+      progressFill.style.width = pct + "%";
+      time.textContent = formatTime(state.position);
+    }
+
+    onStateChange = renderState;
+
+    playPause.addEventListener("click", () => {
+      if (!player || !started) return; // still connecting -- ignore stray taps
+      player.togglePlay().catch(() => {});
+    });
+    progress.addEventListener("click", (e) => {
+      if (!player || !started || !lastDur) return;
+      const rect = progress.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      seekTo(frac * lastDur);
+    });
+
+    playSong(song)
+      .then(() => {
+        started = true;
+        if (lastState) renderState(lastState);
+      })
+      .catch((err) => {
+        // Playback never got going -- the slim bar has no room for an error
+        // message, so drop back to the login/fallback popover instead.
+        window.GuitarAudioDock.hideNowPlaying();
+        const msg =
+          (err && err.message === "not-logged-in"
+            ? "Log opnieuw in."
+            : (err && err.message) || "Afspelen is niet gelukt.") +
+          " Je kunt het nummer ook in de echte app openen.";
+        window.GuitarAudioDock.togglePanel(
+          "spotify",
+          () => {
+            const panel = el("div", "audio-dock__panel");
+            const p = el("p", "audio-dock__status audio-dock__status--error", msg);
+            panel.appendChild(p);
+            if (!isLoggedIn()) {
+              const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Opnieuw inloggen");
+              loginBtn.type = "button";
+              loginBtn.addEventListener("click", () => login());
+              panel.appendChild(loginBtn);
+            }
+            panel.appendChild(fallbackLink(song));
+            return panel;
+          },
+          null
+        );
+      });
+
+    return bar;
   }
 
   /* ---------- Dock button ---------- */
@@ -371,9 +415,17 @@
     btn.addEventListener("click", () => {
       const ctx = window.GuitarAudioDock.getContext();
       if (!ctx.song) return;
+      if (window.GuitarAudioDock.isNowPlaying("spotify")) {
+        window.GuitarAudioDock.hideNowPlaying(); // tapping again stops it
+        return;
+      }
       onStateChange = null;
       if (window.GuitarBackingTrack) window.GuitarBackingTrack.stop();
-      window.GuitarAudioDock.togglePanel("spotify", () => buildPanel(ctx.song), () => {
+      if (!isLoggedIn()) {
+        window.GuitarAudioDock.togglePanel("spotify", () => buildLoginPanel(ctx.song), null);
+        return;
+      }
+      window.GuitarAudioDock.showNowPlaying("spotify", buildNowPlayingBar(ctx.song), () => {
         onStateChange = null;
         pause();
       });

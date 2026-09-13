@@ -380,7 +380,20 @@
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     });
-  }
+    // A deployed fix only reaches an already-open tab/standalone PWA once a
+    // new service worker actually takes control (sw.js calls skipWaiting() +
+    // clients.claim(), but that alone doesn't reload the page that's already
+    // running the old JS/CSS in memory) -- for an installed PWA that's rarely
+    // force-quit, that can mean sitting on a stale build for a long time.
+    // Reload once when control genuinely changes hands so a fresh deploy
+    // shows up on the next relaunch instead of silently never landing. The
+    // `refreshed` guard stops a reload loop if this fires more than once.
+    let refreshed = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (refreshed) return;
+      refreshed = true;
+      location.reload();
+    });
 </script>
 </body>
 </html>

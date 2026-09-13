@@ -1276,8 +1276,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   right: calc(1.1rem + env(safe-area-inset-right));
   /* Sits just above the bottom nav -- which stays visible/reachable while a
      song's detail page is open, see .overlay -- rather than a guessed
-     offset, so it never sits on top of it regardless of device/safe-area. */
-  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem);
+     offset, so it never sits on top of it regardless of device/safe-area.
+     --nowplaying-h (js/audiodock.js) makes room for the now-playing bar
+     when one is showing, so this never ends up hidden behind it either. */
+  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem + var(--nowplaying-h, 0px));
   z-index: 25;
 }
 .songsheet__fab-btn {
@@ -1326,11 +1328,15 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
    right-edge anchor and --bottom-nav-h clearance so the two read as one
    stack. Shown/hidden together with the FAB (see "songsheetexpand" in
    js/songsheet.js). Each source (js/spotify.js, js/backingtrack.js) adds its
-   own icon button here and opens its own panel above the pill. ------------ */
+   own icon button here; tapping it either opens a small setup popover
+   (login / paste-a-link -- .audio-dock__panel below) or, once a track is
+   actually playing, shows the persistent .audio-dock__bar instead -- see
+   that block further down. --nowplaying-h makes room above the bar so the
+   pill and FAB shift up rather than sit behind it. ------------------------ */
 .audio-dock {
   position: absolute;
   right: calc(1.1rem + env(safe-area-inset-right));
-  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem + 50px + 0.6rem);
+  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem + var(--nowplaying-h, 0px) + 50px + 0.6rem);
   z-index: 25;
   display: flex;
   gap: 0.3rem;
@@ -1388,8 +1394,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .audio-dock__status--error { color: var(--amber-deep); }
 
-.audio-dock__form { display: flex; flex-direction: column; gap: 0.5rem; }
-
 .audio-dock__fallback {
   font-size: 0.78rem;
   color: var(--ink-soft);
@@ -1397,33 +1401,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   align-self: flex-start;
 }
 
-.audio-dock__track { display: flex; align-items: center; gap: 0.6rem; }
-.audio-dock__art {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  object-fit: cover;
-  background: var(--surface-raised);
-  flex-shrink: 0;
-}
-.audio-dock__track-meta { min-width: 0; }
-.audio-dock__track-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.audio-dock__track-artist {
-  font-size: 0.78rem;
-  color: var(--ink-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.audio-dock__controls { display: flex; align-items: center; gap: 0.5rem; }
 .audio-dock__playpause {
   width: 32px;
   height: 32px;
@@ -1444,11 +1421,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   border-radius: 2px;
   background: var(--line);
   overflow: hidden;
+  cursor: pointer;
+  /* A little extra hit area above/below the thin visible track, via a
+     transparent border -- easier to tap/drag accurately on a phone without
+     making the bar itself look thicker. */
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  background-clip: padding-box;
+  margin: -8px 0;
 }
 .audio-dock__progress-fill {
   height: 100%;
   width: 0%;
   background: var(--amber);
+  pointer-events: none;
 }
 .audio-dock__time {
   font-size: 0.72rem;
@@ -1457,9 +1443,73 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   flex-shrink: 0;
 }
 
-.audio-dock__player-wrap { display: flex; flex-direction: column; gap: 0.5rem; }
-.audio-dock__player { border-radius: 10px; overflow: hidden; }
-.audio-dock__player-actions { display: flex; justify-content: flex-end; }
+/* ---- Persistent now-playing bar -----------------------------------------
+   Shown in place of the setup popover once a track is actually cued/
+   playing (js/spotify.js, js/backingtrack.js via GuitarAudioDock.
+   showNowPlaying()). Deliberately slim and full-width rather than a card
+   floating over the lyrics -- pause/seek stay reachable without covering
+   the text underneath. Sits directly above the bottom nav; the icon pill
+   and autoscroll FAB shift up above it (see --nowplaying-h). -------------- */
+.audio-dock__bar {
+  position: absolute;
+  left: calc(1.1rem + env(safe-area-inset-left));
+  right: calc(1.1rem + env(safe-area-inset-right));
+  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem);
+  z-index: 24;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+.audio-dock__bar[hidden] { display: none; }
+.audio-dock__bar-thumb {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--surface-raised);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.audio-dock__bar-thumb iframe { width: 100%; height: 100%; display: block; }
+/* The YouTube embed itself has a fixed 16:9-ish aspect, so its thumb is a
+   small rectangle rather than the square Spotify art -- still tiny, just
+   not stretched/cropped. */
+.audio-dock__bar-video {
+  width: 46px;
+  height: 30px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #000;
+}
+.audio-dock__bar-video iframe { width: 100%; height: 100%; display: block; }
+.audio-dock__bar-close,
+.audio-dock__bar-edit {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.audio-dock__bar-status {
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.audio-dock__bar-status--error { color: var(--amber-deep); }
 
 .songsheet__chips {
   display: flex;

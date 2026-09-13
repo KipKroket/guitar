@@ -2,10 +2,13 @@
 //
 // Paste a YouTube link once, it's saved on the song (js/library.js's
 // setSongField -- same field it uses for favorite/learning, so it rides
-// along with sync/backup) and from then on the button just opens a small
-// player. Audio only in spirit -- the embedded player is kept small rather
-// than hidden outright, since YouTube's own terms expect an actual visible
-// player, not a hidden background one.
+// along with sync/backup) and from then on the button just plays it in the
+// persistent now-playing bar. Native YouTube chrome is turned off
+// (playerVars.controls) in favour of the same slim play/pause + seek row
+// the Spotify bar uses -- YouTube's terms still expect an actual visible
+// player rather than a hidden background one, so the video stays on
+// screen, just as a small thumbnail instead of a large embed sitting over
+// the lyrics.
 (function () {
   const VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 
@@ -32,7 +35,15 @@
   }
 
   let ytPlayer = null;
+  let progressTimer = null;
+  function stopProgressTimer() {
+    if (progressTimer != null) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  }
   function destroyPlayer() {
+    stopProgressTimer();
     if (ytPlayer) {
       try {
         ytPlayer.destroy();
@@ -59,11 +70,20 @@
     return n;
   }
 
-  function buildLinkForm(song, panel) {
-    const wrap = el("div", "audio-dock__form");
+  function formatTime(sec) {
+    const s = Math.max(0, Math.round(sec || 0));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  // Setup-only popover: paste/replace the link. Shown when there's no link
+  // yet, and reachable again via the pencil icon on the now-playing bar to
+  // swap in a different one.
+  function buildLinkForm(song) {
+    const wrap = el("div", "audio-dock__panel");
     wrap.appendChild(el("p", "audio-dock__hint", "Plak een YouTube-link naar de backing track."));
     const input = el("input", "custom-song__input");
     input.type = "url";
+    input.value = song.backingTrackUrl || "";
     input.placeholder = "https://youtube.com/watch?v=…";
     wrap.appendChild(input);
     const error = el("p", "audio-dock__status audio-dock__status--error", "");
@@ -83,67 +103,139 @@
       if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
         window.GuitarLibrary.setSongField(song.id, { backingTrackUrl: url });
       }
-      panel.textContent = "";
-      panel.appendChild(buildPlayer(song, panel));
+      window.GuitarAudioDock.showNowPlaying("backingtrack", buildNowPlayingBar(song), () => {
+        destroyPlayer();
+      });
     });
     wrap.appendChild(save);
     setTimeout(() => input.focus(), 30);
     return wrap;
   }
 
-  function buildPlayer(song, panel) {
-    const wrap = el("div", "audio-dock__player-wrap");
-    const mount = el("div", "audio-dock__player");
-    wrap.appendChild(mount);
+  // The persistent now-playing bar (js/audiodock.js's showNowPlaying) --
+  // same shape as Spotify's: small thumbnail, play/pause, tap-to-seek
+  // progress, time, plus a pencil (change link) and a close button.
+  function buildNowPlayingBar(song) {
+    const bar = document.createDocumentFragment();
 
-    const status = el("p", "audio-dock__status", "Laden…");
-    wrap.appendChild(status);
+    const mount = el("div", "audio-dock__bar-video");
+    bar.appendChild(mount);
 
-    const actions = el("div", "audio-dock__player-actions");
-    const change = el("button", "songsheet__btn songsheet__btn--sm", "Andere link");
-    change.type = "button";
-    change.addEventListener("click", () => {
-      destroyPlayer();
-      panel.textContent = "";
-      panel.appendChild(buildLinkForm(song, panel));
+    const status = el("p", "audio-dock__bar-status", "Laden…");
+    bar.appendChild(status);
+
+    const playPause = el("button", "audio-dock__playpause", "");
+    playPause.type = "button";
+    playPause.setAttribute("aria-label", "Play/pause");
+    playPause.innerHTML =
+      '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>';
+    playPause.hidden = true;
+    bar.appendChild(playPause);
+
+    const progress = el("div", "audio-dock__progress");
+    const progressFill = el("div", "audio-dock__progress-fill");
+    progress.appendChild(progressFill);
+    progress.hidden = true;
+    bar.appendChild(progress);
+
+    const time = el("span", "audio-dock__time", "0:00");
+    time.hidden = true;
+    bar.appendChild(time);
+
+    const editBtn = el("button", "audio-dock__bar-edit", "");
+    editBtn.type = "button";
+    editBtn.setAttribute("aria-label", "Andere link");
+    editBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+    editBtn.addEventListener("click", () => {
+      // Just a transient popover over the still-playing bar -- cancelling it
+      // (tap outside) shouldn't tear down the video that's already going.
+      window.GuitarAudioDock.togglePanel("backingtrack", () => buildLinkForm(song), null);
     });
-    actions.appendChild(change);
-    wrap.appendChild(actions);
+    bar.appendChild(editBtn);
+
+    const close = el("button", "audio-dock__bar-close", "");
+    close.type = "button";
+    close.setAttribute("aria-label", "Stoppen");
+    close.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    close.addEventListener("click", () => window.GuitarAudioDock.hideNowPlaying());
+    bar.appendChild(close);
 
     const videoId = extractVideoId(song.backingTrackUrl);
     if (!videoId) {
       status.textContent = "Deze link ziet er niet meer geldig uit.";
-      status.classList.add("audio-dock__status--error");
-      return wrap;
+      status.classList.add("audio-dock__bar-status--error");
+      return bar;
     }
+
+    let dur = 0;
+    function renderPlaying(isPlaying) {
+      playPause.classList.toggle("is-playing", isPlaying);
+      playPause.innerHTML = isPlaying
+        ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>';
+    }
+    function tick() {
+      if (!ytPlayer || !ytPlayer.getCurrentTime) return;
+      dur = ytPlayer.getDuration() || dur;
+      const pos = ytPlayer.getCurrentTime() || 0;
+      progressFill.style.width = (dur ? Math.min(100, (pos / dur) * 100) : 0) + "%";
+      time.textContent = formatTime(pos);
+    }
+
+    playPause.addEventListener("click", () => {
+      if (!ytPlayer) return;
+      const state = ytPlayer.getPlayerState();
+      if (state === window.YT.PlayerState.PLAYING) ytPlayer.pauseVideo();
+      else ytPlayer.playVideo();
+    });
+    progress.addEventListener("click", (e) => {
+      if (!ytPlayer || !dur) return;
+      const rect = progress.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      ytPlayer.seekTo(frac * dur, true);
+    });
 
     loadYtApi().then((YT) => {
       destroyPlayer();
       ytPlayer = new YT.Player(mount, {
         videoId,
         width: "100%",
-        height: "150",
-        playerVars: { playsinline: 1 },
+        height: "100%",
+        playerVars: { playsinline: 1, controls: 0, autoplay: 1, rel: 0, modestbranding: 1 },
         events: {
           onReady: () => {
             status.hidden = true;
+            playPause.hidden = false;
+            progress.hidden = false;
+            time.hidden = false;
+          },
+          onStateChange: (e) => {
+            const playing = e.data === YT.PlayerState.PLAYING;
+            renderPlaying(playing);
+            if (playing) {
+              stopProgressTimer();
+              progressTimer = setInterval(tick, 400);
+              tick();
+            } else {
+              stopProgressTimer();
+            }
           },
           onError: () => {
+            stopProgressTimer();
             status.hidden = false;
-            status.classList.add("audio-dock__status--error");
+            status.classList.add("audio-dock__bar-status--error");
             status.textContent = "Deze video kan niet worden afgespeeld.";
+            playPause.hidden = true;
+            progress.hidden = true;
+            time.hidden = true;
           },
         },
       });
     });
 
-    return wrap;
-  }
-
-  function buildPanel(song) {
-    const panel = el("div", "audio-dock__panel");
-    panel.appendChild(song.backingTrackUrl ? buildPlayer(song, panel) : buildLinkForm(song, panel));
-    return panel;
+    return bar;
   }
 
   const YOUTUBE_SVG =
@@ -158,9 +250,16 @@
     btn.addEventListener("click", () => {
       const ctx = window.GuitarAudioDock.getContext();
       if (!ctx.song) return;
+      if (window.GuitarAudioDock.isNowPlaying("backingtrack")) {
+        window.GuitarAudioDock.hideNowPlaying(); // tapping again stops it
+        return;
+      }
       if (window.GuitarSpotify) window.GuitarSpotify.stop();
-      window.GuitarAudioDock.togglePanel("backingtrack", () => buildPanel(ctx.song), () => {
-        stop();
+      if (!ctx.song.backingTrackUrl) {
+        window.GuitarAudioDock.togglePanel("backingtrack", () => buildLinkForm(ctx.song), null);
+        return;
+      }
+      window.GuitarAudioDock.showNowPlaying("backingtrack", buildNowPlayingBar(ctx.song), () => {
         destroyPlayer();
       });
     });
