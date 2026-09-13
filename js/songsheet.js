@@ -443,8 +443,12 @@
   let fabOutsideHandler = null;
 
   function closeFabMenu() {
-    if (!state || !state.autoscroll || !state.autoscroll.fabMenuOpen) return;
-    state.autoscroll.fabMenuOpen = false;
+    if (state && state.autoscroll) state.autoscroll.fabMenuOpen = false;
+    // Unconditional, unlike the flag update above -- this runs from
+    // close() too, after state has already been nulled out (song detail
+    // dismissed while the menu happened to be open), and the listener
+    // still needs removing then or it leaks exactly the same way a missed
+    // call from the button handler used to.
     if (fabOutsideHandler) {
       document.removeEventListener("pointerdown", fabOutsideHandler, true);
       fabOutsideHandler = null;
@@ -473,7 +477,9 @@
     }
     if (!fab) {
       fab = el("div", "songsheet__fab");
-      (document.querySelector(".app") || document.body).appendChild(fab);
+      // A child of .bottom-nav, not .app -- see the .songsheet__fab CSS
+      // comment: bottom:100% of the nav itself needs no JS-measured height.
+      (document.querySelector(".bottom-nav") || document.querySelector(".app") || document.body).appendChild(fab);
     }
     fab.textContent = "";
 
@@ -487,9 +493,22 @@
       '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.autoscroll.fabMenuOpen = !state.autoscroll.fabMenuOpen;
+      // Re-tapping the button to close has to go through closeFabMenu() too
+      // -- it's the only thing that removes the document-level outside-tap
+      // listener below. Toggling the flag directly here used to skip that
+      // on this path (only the outside-tap route called it), leaking one
+      // capture-phase pointerdown listener per open/close cycle. Each leaked
+      // listener re-ran forever on every tap anywhere in the app (including
+      // a full sheet re-parse via renderFab -> sheetHasLyrics), so a long
+      // session with the autoscroll menu toggled a lot would pile up enough
+      // of them to make the whole app feel frozen.
+      if (state.autoscroll.fabMenuOpen) {
+        closeFabMenu();
+        renderFab();
+        return;
+      }
+      state.autoscroll.fabMenuOpen = true;
       renderFab();
-      if (!state.autoscroll.fabMenuOpen) return;
       // Registered after this click has finished bubbling, so the same tap
       // that opened the menu doesn't also close it via the outside handler.
       setTimeout(() => {

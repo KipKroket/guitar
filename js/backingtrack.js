@@ -170,6 +170,11 @@
     }
 
     let dur = 0;
+    const seekBar = window.GuitarAudioDock.wireSeekBar(progress, progressFill, time, {
+      getDuration: () => dur,
+      onSeek: (sec) => ytPlayer && ytPlayer.seekTo(sec, true),
+      formatTime,
+    });
     function renderPlaying(isPlaying) {
       playPause.classList.toggle("is-playing", isPlaying);
       playPause.innerHTML = isPlaying
@@ -179,6 +184,7 @@
     function tick() {
       if (!ytPlayer || !ytPlayer.getCurrentTime) return;
       dur = ytPlayer.getDuration() || dur;
+      if (seekBar.isDragging()) return; // don't fight the drag preview
       const pos = ytPlayer.getCurrentTime() || 0;
       progressFill.style.width = (dur ? Math.min(100, (pos / dur) * 100) : 0) + "%";
       time.textContent = formatTime(pos);
@@ -189,12 +195,6 @@
       const state = ytPlayer.getPlayerState();
       if (state === window.YT.PlayerState.PLAYING) ytPlayer.pauseVideo();
       else ytPlayer.playVideo();
-    });
-    progress.addEventListener("click", (e) => {
-      if (!ytPlayer || !dur) return;
-      const rect = progress.getBoundingClientRect();
-      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      ytPlayer.seekTo(frac * dur, true);
     });
 
     loadYtApi().then((YT) => {

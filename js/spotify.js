@@ -333,6 +333,11 @@
 
     let started = false;
     let lastDur = 0;
+    const seekBar = window.GuitarAudioDock.wireSeekBar(progress, progressFill, time, {
+      getDuration: () => lastDur,
+      onSeek: (ms) => seekTo(ms),
+      formatTime,
+    });
 
     function renderState(state) {
       if (!state) return;
@@ -347,6 +352,9 @@
         : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" fill="currentColor"/></svg>';
       const dur = (state.duration || state.track_window.current_track.duration_ms) || 0;
       lastDur = dur;
+      // Skip while the user's finger is still on the scrub bar -- the SDK's
+      // own (still-old) position would otherwise fight the drag preview.
+      if (seekBar.isDragging()) return;
       const pct = dur ? Math.min(100, (state.position / dur) * 100) : 0;
       progressFill.style.width = pct + "%";
       time.textContent = formatTime(state.position);
@@ -357,12 +365,6 @@
     playPause.addEventListener("click", () => {
       if (!player || !started) return; // still connecting -- ignore stray taps
       player.togglePlay().catch(() => {});
-    });
-    progress.addEventListener("click", (e) => {
-      if (!player || !started || !lastDur) return;
-      const rect = progress.getBoundingClientRect();
-      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      seekTo(frac * lastDur);
     });
 
     playSong(song)

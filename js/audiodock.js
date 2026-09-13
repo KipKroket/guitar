@@ -8,9 +8,11 @@
 //    source's *setup popover* is open at a time (login prompt / paste-a-
 //    link form -- see togglePanel/closePanel);
 //  - the persistent now-playing bar (showNowPlaying/hideNowPlaying), shown
-//    once a source actually has something cued or playing. It's a separate,
-//    always-full-width element rather than another popover, specifically so
-//    playback controls never sit as a card on top of the lyrics -- see the
+//    once a source actually has something cued or playing. Rather than
+//    floating another card above the pill, it takes over the bottom nav's
+//    own spot (a child of .bottom-nav, inset:0) and hides the nav buttons
+//    underneath -- the nav isn't needed while something's playing, and this
+//    way the bar never has to fight the lyrics for space either. See the
 //    .audio-dock__bar comment in style.css.
 (function () {
   let dock = null;
@@ -29,7 +31,9 @@
     dock = document.createElement("div");
     dock.className = "audio-dock";
     dock.hidden = true;
-    (document.querySelector(".app") || document.body).appendChild(dock);
+    // A child of .bottom-nav -- see the .audio-dock CSS comment: bottom:100%
+    // of the nav itself needs no JS-measured height to stay clear of it.
+    (document.querySelector(".bottom-nav") || document.querySelector(".app") || document.body).appendChild(dock);
     return dock;
   }
 
@@ -38,16 +42,9 @@
     bar = document.createElement("div");
     bar.className = "audio-dock__bar";
     bar.hidden = true;
-    (document.querySelector(".app") || document.body).appendChild(bar);
-    // Mirrors js/app.js's --bottom-nav-h: the FAB and dock pill need to know
-    // how tall the bar is (0 when hidden) so they can shift up and clear it.
-    if (window.ResizeObserver) new ResizeObserver(syncBarHeight).observe(bar);
+    const nav = document.querySelector(".bottom-nav");
+    (nav || document.querySelector(".app") || document.body).appendChild(bar);
     return bar;
-  }
-
-  function syncBarHeight() {
-    const h = bar && !bar.hidden ? bar.getBoundingClientRect().height + 8 : 0;
-    document.documentElement.style.setProperty("--nowplaying-h", h + "px");
   }
 
   // One event for both "a setup popover is open" and "this source is now
@@ -101,8 +98,8 @@
       if (openId !== id) return;
       outsideHandler = (ev) => {
         if (!ev.target.closest) return;
-        // The autoscroll FAB lives outside .audio-dock (it's anchored to
-        // .app, not this pill) -- without this, tapping it to turn on
+        // The autoscroll FAB lives outside .audio-dock (it's its own
+        // sibling element) -- without this, tapping it to turn on
         // autoscroll read as "click outside" and closed + stopped whatever
         // was playing here, which is its own separate control.
         if (ev.target.closest(".audio-dock") || ev.target.closest(".songsheet__fab")) return;
@@ -124,9 +121,10 @@
     b.textContent = "";
     b.appendChild(contentEl);
     b.hidden = false;
+    const nav = document.querySelector(".bottom-nav");
+    if (nav) nav.classList.add("has-nowplaying");
     barId = id;
     barCloseFn = onCloseFn || null;
-    syncBarHeight();
     notify();
   }
 
@@ -145,7 +143,8 @@
       bar.hidden = true;
       bar.textContent = "";
     }
-    syncBarHeight();
+    const nav = document.querySelector(".bottom-nav");
+    if (nav) nav.classList.remove("has-nowplaying");
     if (wasPlaying) notify();
   }
 
@@ -162,6 +161,51 @@
     ensureDock().hidden = false;
   });
 
+  // Shared drag-to-seek wiring for the now-playing bar's progress track --
+  // both js/spotify.js and js/backingtrack.js want the same tap-or-drag
+  // scrubbing behaviour, so it lives here once instead of twice. Returns
+  // `{ isDragging }` so the caller's own periodic position updates (from a
+  // player_state_changed event, a polling interval, ...) know to skip
+  // writing to the fill/time while the user's finger is still on it --
+  // otherwise the live position would fight the drag preview every tick.
+  function wireSeekBar(progressEl, fillEl, timeEl, opts) {
+    let dragging = false;
+
+    function fracFromEvent(e) {
+      const rect = progressEl.getBoundingClientRect();
+      return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    }
+    function preview(frac) {
+      fillEl.style.width = frac * 100 + "%";
+      if (timeEl && opts.formatTime) timeEl.textContent = opts.formatTime(frac * (opts.getDuration() || 0));
+    }
+    function end(e) {
+      if (!dragging) return;
+      dragging = false;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      const dur = opts.getDuration() || 0;
+      if (dur) opts.onSeek(fracFromEvent(e) * dur);
+    }
+    function onMove(e) {
+      if (dragging) preview(fracFromEvent(e));
+    }
+
+    progressEl.addEventListener("pointerdown", (e) => {
+      if (!opts.getDuration()) return; // nothing loaded yet -- ignore stray taps
+      dragging = true;
+      preview(fracFromEvent(e));
+      // On document, not progressEl -- a drag's pointermove/pointerup routinely
+      // ends up outside the (thin) track once the finger moves at all.
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", end);
+      document.addEventListener("pointercancel", end);
+    });
+
+    return { isDragging: () => dragging };
+  }
+
   window.GuitarAudioDock = {
     registerButton(el) {
       ensureDock().appendChild(el);
@@ -172,5 +216,6 @@
     hideNowPlaying,
     isNowPlaying: (id) => barId === id,
     getContext: () => ctx,
+    wireSeekBar,
   };
 })();

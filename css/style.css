@@ -163,8 +163,14 @@ body {
 
 /* ---------- Bottom nav ---------- */
 /* A non-scrolling flex child at the bottom of the shell -- not position:
-   fixed, so iOS overscroll can't peel it away from the edge. */
+   fixed, so iOS overscroll can't peel it away from the edge.
+   position:relative makes it the anchor for the autoscroll FAB, the audio
+   dock pill, and the now-playing bar (js/songsheet.js, js/audiodock.js) --
+   they sit at bottom:100% / inset:0 of *this exact element* rather than a
+   JS-measured height, so they can never end up off by however much the
+   measurement was stale or wrong. */
 .bottom-nav {
+  position: relative;
   flex-shrink: 0;
   width: 100%;
   display: flex;
@@ -191,6 +197,11 @@ body {
 .nav-btn svg { stroke: currentColor; }
 
 .nav-btn.is-active { color: var(--amber-deep); }
+
+/* Hidden (not just covered) while the now-playing bar occupies this same
+   spot -- see .audio-dock__bar -- so a tap can't reach a nav button
+   underneath it. */
+.bottom-nav.has-nowplaying .nav-btn { visibility: hidden; }
 
 /* Piano mode has no tuner -- drop the button and the remaining three space
    themselves evenly (each is still flex: 1). */
@@ -1261,25 +1272,18 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 
 /* Floating autoscroll control -- absolutely positioned against .app (a
    child of it, not of #songsheet -- see js/songsheet.js) so it stays put
-   and reachable no matter how far the sheet has scrolled. Anchored to
-   .app rather than position:fixed against the viewport: fixed positioning
-   is unreliable in iOS standalone (see the .app height comment above) and
-   could drift below the real screen edge, landing on top of the bottom
-   nav instead of above it. .app is already the reliable, safe-area-aware
-   box (it's the anchor for .settings-fab too), so anchoring here keeps
-   the button clear of the nav in every environment. Shown any time the
-   sheet panel is expanded and has lyrics to scroll through (not just
-   while autoscroll is actually running), since it's now the only place to
-   turn autoscroll on. */
+   and reachable no matter how far the sheet has scrolled. A child of
+   .bottom-nav itself (js/songsheet.js), not of .app -- bottom:100% of that
+   exact element always lands right on its top edge no matter how tall it
+   actually renders (safe-area inset, font metrics, whatever), with no JS
+   measurement in the loop to go stale or race. Shown any time the sheet
+   panel is expanded and has lyrics to scroll through (not just while
+   autoscroll is actually running), since it's now the only place to turn
+   autoscroll on. */
 .songsheet__fab {
   position: absolute;
   right: calc(1.1rem + env(safe-area-inset-right));
-  /* Sits just above the bottom nav -- which stays visible/reachable while a
-     song's detail page is open, see .overlay -- rather than a guessed
-     offset, so it never sits on top of it regardless of device/safe-area.
-     --nowplaying-h (js/audiodock.js) makes room for the now-playing bar
-     when one is showing, so this never ends up hidden behind it either. */
-  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem + var(--nowplaying-h, 0px));
+  bottom: calc(100% + 0.85rem);
   z-index: 25;
 }
 .songsheet__fab-btn {
@@ -1324,19 +1328,18 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .songsheet__fab-stop { width: 100%; }
 
 /* ---------- Audio dock: Spotify + backing track (js/audiodock.js) --------
-   A small pill stacked directly above the autoscroll FAB, sharing its
-   right-edge anchor and --bottom-nav-h clearance so the two read as one
-   stack. Shown/hidden together with the FAB (see "songsheetexpand" in
-   js/songsheet.js). Each source (js/spotify.js, js/backingtrack.js) adds its
-   own icon button here; tapping it either opens a small setup popover
-   (login / paste-a-link -- .audio-dock__panel below) or, once a track is
-   actually playing, shows the persistent .audio-dock__bar instead -- see
-   that block further down. --nowplaying-h makes room above the bar so the
-   pill and FAB shift up rather than sit behind it. ------------------------ */
+   A small pill stacked directly above the autoscroll FAB -- both children
+   of .bottom-nav, see the .songsheet__fab comment above for why. Shown/
+   hidden together with the FAB (see "songsheetexpand" in js/songsheet.js).
+   Each source (js/spotify.js, js/backingtrack.js) adds its own icon button
+   here; tapping it either opens a small setup popover (login / paste-a-
+   link -- .audio-dock__panel below) or, once a track is actually playing,
+   shows .audio-dock__bar instead, which takes over the nav's own spot
+   rather than stacking with this pill -- see that block further down. ---- */
 .audio-dock {
   position: absolute;
   right: calc(1.1rem + env(safe-area-inset-right));
-  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem + var(--nowplaying-h, 0px) + 50px + 0.6rem);
+  bottom: calc(100% + 0.85rem + 50px + 0.6rem);
   z-index: 25;
   display: flex;
   gap: 0.3rem;
@@ -1416,25 +1419,45 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .audio-dock__playpause[disabled] { opacity: 0.5; cursor: default; }
 .audio-dock__progress {
+  position: relative;
   flex: 1;
-  height: 4px;
-  border-radius: 2px;
+  height: 6px;
+  border-radius: 3px;
   background: var(--line);
-  overflow: hidden;
   cursor: pointer;
+  touch-action: none; /* this element owns vertical drags too, for scrubbing */
   /* A little extra hit area above/below the thin visible track, via a
      transparent border -- easier to tap/drag accurately on a phone without
      making the bar itself look thicker. */
-  border-top: 8px solid transparent;
-  border-bottom: 8px solid transparent;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
   background-clip: padding-box;
-  margin: -8px 0;
+  margin: -10px 0;
 }
 .audio-dock__progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
   height: 100%;
   width: 0%;
+  border-radius: 3px;
   background: var(--amber);
   pointer-events: none;
+}
+/* A small draggable-looking knob at the current position -- makes it
+   obvious at a glance that this is a scrub bar, not just a static
+   progress display. */
+.audio-dock__progress-fill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  transform: translate(50%, -50%);
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .audio-dock__time {
   font-size: 0.72rem;
@@ -1446,30 +1469,32 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 /* ---- Persistent now-playing bar -----------------------------------------
    Shown in place of the setup popover once a track is actually cued/
    playing (js/spotify.js, js/backingtrack.js via GuitarAudioDock.
-   showNowPlaying()). Deliberately slim and full-width rather than a card
-   floating over the lyrics -- pause/seek stay reachable without covering
-   the text underneath. Sits directly above the bottom nav; the icon pill
-   and autoscroll FAB shift up above it (see --nowplaying-h). -------------- */
+   showNowPlaying()). A child of .bottom-nav, inset:0 -- it takes over the
+   nav's exact spot rather than floating above it, since the nav isn't
+   needed while something is playing (its buttons are hidden underneath,
+   see .bottom-nav.has-nowplaying). That also means it's sized like the
+   nav, not a small pill -- room enough for real controls without ever
+   sitting over the lyrics. Closing it (the X) hands the spot back to the
+   nav. -------------------------------------------------------------------- */
 .audio-dock__bar {
   position: absolute;
-  left: calc(1.1rem + env(safe-area-inset-left));
-  right: calc(1.1rem + env(safe-area-inset-right));
-  bottom: calc(var(--bottom-nav-h, 4.75rem) + 0.85rem);
+  inset: 0;
   z-index: 24;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.45rem 0.7rem;
-  border-radius: 999px;
-  border: 1px solid var(--line);
+  gap: 0.7rem;
+  /* The nav's own bottom padding already carves out the home-indicator
+     safe area -- matched here so the controls center in the *usable*
+     height, not the full box including that dead space. */
+  padding: 0 calc(0.9rem + env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    calc(0.9rem + env(safe-area-inset-left));
   background: var(--surface);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
 }
 .audio-dock__bar[hidden] { display: none; }
 .audio-dock__bar-thumb {
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
   object-fit: cover;
   background: var(--surface-raised);
   flex-shrink: 0;
@@ -1477,12 +1502,12 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .audio-dock__bar-thumb iframe { width: 100%; height: 100%; display: block; }
 /* The YouTube embed itself has a fixed 16:9-ish aspect, so its thumb is a
-   small rectangle rather than the square Spotify art -- still tiny, just
-   not stretched/cropped. */
+   small rectangle rather than the square Spotify art -- still compact,
+   just not stretched/cropped. */
 .audio-dock__bar-video {
-  width: 46px;
-  height: 30px;
-  border-radius: 6px;
+  width: 56px;
+  height: 38px;
+  border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;
   background: #000;
@@ -1490,8 +1515,8 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .audio-dock__bar-video iframe { width: 100%; height: 100%; display: block; }
 .audio-dock__bar-close,
 .audio-dock__bar-edit {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   flex-shrink: 0;
   display: flex;
@@ -1505,7 +1530,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .audio-dock__bar-status {
   flex: 1;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--ink-soft);
   margin: 0;
 }
@@ -1573,6 +1598,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 .songsheet__body {
   margin-top: 1.4rem;
   overflow-x: auto;
+  /* Trailing scroll room -- without it the last lines end up stuck right at
+     the bottom edge (under the nav/now-playing bar) with nowhere left to
+     autoscroll to, so they never reach a comfortable reading position. */
+  padding-bottom: 7rem;
 }
 .ss-section { margin-bottom: 1.3rem; }
 .ss-section:last-child { margin-bottom: 0; }
