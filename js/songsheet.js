@@ -426,10 +426,14 @@
   }
 
   /* ---- Floating autoscroll control -------------------------------------
-     A small round button pinned to the bottom-right of the viewport
-     (position: fixed -- a plain child of <body>, not of #songsheet, so it
-     isn't clipped by the overlay's own overflow-y:auto and stays put
-     regardless of scroll position). Shown whenever the sheet is expanded
+     A small round button pinned to the bottom-right of the app shell
+     (position: absolute against .app -- a plain child of it, not of
+     #songsheet, so it isn't clipped by the overlay's own overflow-y:auto
+     and stays put regardless of scroll position). Anchored to .app rather
+     than position:fixed against the viewport, since fixed positioning is
+     unreliable in iOS standalone (see the .app height comment in
+     style.css) and could drift below the real screen edge, overlapping
+     the bottom nav. Shown whenever the sheet is expanded
      and has lyrics to scroll through -- it's the only autoscroll control
      now (the old toolbar toggle+menu is gone), so it has to be reachable
      to turn autoscroll on in the first place, not just to adjust it once
@@ -469,7 +473,7 @@
     }
     if (!fab) {
       fab = el("div", "songsheet__fab");
-      document.body.appendChild(fab);
+      (document.querySelector(".app") || document.body).appendChild(fab);
     }
     fab.textContent = "";
 
