@@ -6,7 +6,7 @@ sleeps). Users sign in with a username + 6-digit passcode; their library is
 merged with a server copy so no device overwrites another.
 
 The same Worker also serves **`POST /song`** for the song-sheet feature: it
-scrapes a chord sheet (Ultimate Guitar first, then e-chords), converts it to
+scrapes a chord sheet (Ultimate Guitar first, then Cifra Club), converts it to
 the plain "chords above the lyrics" text `../js/songsheet.js` parses, caches
 it in the D1 table `sheets`, and returns it. Open endpoint, rate-limited to
 40 upstream fetches per IP per hour (cache hits don't count). Request body

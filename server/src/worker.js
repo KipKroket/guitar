@@ -14,7 +14,7 @@
 // in step.
 //
 // /song scrapes a chord sheet from an external site (Ultimate Guitar first,
-// then e-chords), converts it to the plain "chords above the lyrics" text
+// then Cifra Club), converts it to the plain "chords above the lyrics" text
 // that app/js/songsheet.js parses, caches it in D1 (table `sheets`), and
 // returns it. `refresh: true` re-fetches past the cache. It's an open
 // endpoint, lightly rate-limited per IP; if it ever gets abused, gate it
@@ -165,9 +165,17 @@ async function song(env, body, request) {
   // never pass (confirmed -- it 403s identically with or without a Worker),
   // so it never once succeeded here and only added latency. Left reachable
   // via sourcesForUrl() for a pasted link, in case that ever changes.
+  //
+  // Cifra Club has no such challenge (confirmed working from a Worker, no
+  // UA spoofing even required) and is a large, independent catalog, so it's
+  // a genuine second attempt rather than a duplicate of Ultimate Guitar --
+  // it runs whenever UG comes up empty.
   const chain = url
     ? sourcesForUrl(url)
-    : [{ name: "ultimate-guitar", run: () => ugSearchAndFetch(artist, title) }];
+    : [
+        { name: "ultimate-guitar", run: () => ugSearchAndFetch(artist, title) },
+        { name: "cifraclub", run: () => cifraclubSearchAndFetch(artist, title) },
+      ];
 
   const tried = [];
   let result = null;
@@ -384,6 +392,83 @@ async function echordsFromUrl(pageUrl, fallback) {
   return { raw: head + bodyText + "\n", meta, url: pageUrl };
 }
 
+/* ---- source: Cifra Club ----
+   Cifra Club renders the sheet server-side with no Cloudflare challenge
+   (confirmed working from a Worker, no UA spoofing needed) as a <pre> of
+   <div> lines where each chord is a plain <b data-chord-name="..."> already
+   sitting in the right column above/inline with its lyric -- so stripping
+   tags is all it takes to get the same "chords above lyrics" text
+   ugContentToText() produces for UG. Search goes through the public,
+   unauthenticated, CORS-open Solr endpoint the site's own search box calls
+   (found by watching its network traffic; not documented, so it could
+   change under us, same risk as scraping the HTML itself). */
+
+async function cifraclubSearchAndFetch(artist, title) {
+  const cleanedTitle = cleanTitle(title);
+  const q = [artist, cleanedTitle].filter(Boolean).join(" ");
+  const res = await fetch("https://solr.sscdn.co/cc/c7/?q=" + encodeURIComponent(q) + "&limit=15", {
+    cf: { cacheTtl: 900 },
+  });
+  if (!res.ok) throw new Error("search HTTP " + res.status);
+  const data = await res.json();
+  const docs = (data && data.response && data.response.docs) || [];
+  // tipo "2" is a song page; other types are albums, artists or user playlists.
+  const hits = docs.filter((d) => d && d.tipo === "2" && d.dns && d.url);
+  if (!hits.length) throw new Error("no chord results");
+
+  const wantTitle = normKey(cleanedTitle);
+  const wantArtist = normKey(artist);
+  hits.forEach((d) => {
+    d._titleScore = tokenOverlap(wantTitle, normKey(cleanTitle(d.txt || "")));
+    d._artistScore = wantArtist ? tokenOverlap(wantArtist, normKey(d.art || "")) : 1;
+  });
+  hits.sort((a, b) => (b._titleScore * 2 + b._artistScore) - (a._titleScore * 2 + a._artistScore));
+
+  const pick = hits[0];
+  return cifraclubFromUrl("https://www.cifraclub.com/" + pick.dns + "/" + pick.url + "/", {
+    artist: pick.art || artist,
+    title: pick.txt || title,
+  });
+}
+
+async function cifraclubFromUrl(pageUrl, fallback) {
+  fallback = fallback || {};
+  const html = await getHtml(pageUrl);
+  const pre = html.match(/<pre[^>]*data-chord-content[^>]*>([\s\S]*?)<\/pre>/i);
+  if (!pre) {
+    if (/just a moment|challenge-platform|cf-browser-verification/i.test(html))
+      throw new Error("blocked (challenge)");
+    throw new Error("no chord sheet on page");
+  }
+  const bodyText = cifraclubContentToText(pre[1]);
+  if (bodyText.length < 40) throw new Error("sheet too short");
+
+  // No fallback names given (a pasted URL) -- the page <title> is
+  // "Song - Artist - Cifra Club".
+  const titleTag = html.match(/<title>([^<]*)<\/title>/i);
+  const parts = titleTag ? htmlDecode(titleTag[1]).split(" - ") : [];
+  const meta = {
+    title: fallback.title || (parts[0] || "").trim(),
+    artist: fallback.artist || (parts[1] || "").trim(),
+  };
+  const head =
+    meta.title || meta.artist ? "{title: " + meta.title + "}\n{artist: " + meta.artist + "}\n\n" : "";
+  return { raw: head + bodyText + "\n", meta, url: pageUrl };
+}
+
+// Unlike UG's [ch]/[tab] wrapper syntax, Cifra Club's markup IS the layout --
+// each chord's tag already sits at the column it belongs above, so this only
+// strips tags and decodes entities (no synthetic newlines: every <div> line
+// already carries its own trailing "\n", inserting another one would open a
+// blank line between every chord line and the lyric line under it).
+function cifraclubContentToText(pre) {
+  return htmlDecode(String(pre).replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, ""))
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /* ---- shared scraping helpers ---- */
 
 function sourcesForUrl(url) {
@@ -392,8 +477,11 @@ function sourcesForUrl(url) {
     return [{ name: "ultimate-guitar", run: () => ugFromUrl(url, {}) }];
   if (u.includes("e-chords.com"))
     return [{ name: "e-chords", run: () => echordsFromUrl(url, {}) }];
+  if (u.includes("cifraclub.com"))
+    return [{ name: "cifraclub", run: () => cifraclubFromUrl(url, {}) }];
   return [
     { name: "ultimate-guitar", run: () => ugFromUrl(url, {}) },
+    { name: "cifraclub", run: () => cifraclubFromUrl(url, {}) },
     { name: "e-chords", run: () => echordsFromUrl(url, {}) },
   ];
 }
@@ -409,6 +497,10 @@ async function getHtml(pageUrl, attempt) {
     headers: {
       "User-Agent": SCRAPE_UA,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      // Cifra Club localizes both UI chrome and some user-submitted section
+      // labels by request language; without this a Worker's geo-routed
+      // request can land on a Spanish or Portuguese version of an English
+      // song page.
       "Accept-Language": "en-US,en;q=0.9",
     },
     redirect: "follow",

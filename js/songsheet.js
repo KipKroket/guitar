@@ -766,7 +766,7 @@
     ta.spellcheck = false;
     ta.setAttribute("autocapitalize", "none");
     ta.placeholder =
-      "[Verse]\n[G]Twinkle twinkle [C]little [G]star\n\n— or —\n\nG                 C     G\nTwinkle twinkle little star\n\n— or paste a link to the chords page (Ultimate Guitar, e-chords, …)";
+      "[Verse]\n[G]Twinkle twinkle [C]little [G]star\n\n— or —\n\nG                 C     G\nTwinkle twinkle little star\n\n— or paste a link to the chords page (Ultimate Guitar, Cifra Club, e-chords, …)";
     form.appendChild(ta);
 
     const actions = el("div", "songsheet__actions");
