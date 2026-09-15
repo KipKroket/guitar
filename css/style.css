@@ -1139,6 +1139,11 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   font-weight: 600;
 }
 .songsheet__btn--sm { padding: 0.4rem 0.85rem; font-size: 0.8rem; }
+.songsheet__btn.is-active {
+  border-color: var(--amber-deep);
+  background: var(--amber);
+  color: var(--bg);
+}
 
 .songsheet__editor {
   display: flex;
@@ -1309,6 +1314,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   background: var(--amber);
   color: var(--bg);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+/* Following a Spotify/YouTube recording's own timing instead of a fixed
+   speed -- --good (already used elsewhere for a positive/on state) instead
+   of amber, so the two autoscroll modes read as visibly different at a
+   glance without having to open the menu. */
+.songsheet__fab-btn.is-active.is-synced {
+  border-color: var(--good);
+  background: var(--good);
+}
+.songsheet__scroll-status {
+  font-size: 0.78rem;
+  color: var(--good);
+  font-weight: 600;
+  margin: 0;
 }
 .songsheet__fab-menu {
   position: absolute;
@@ -1631,6 +1650,30 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   align-items: flex-end;
   line-height: 1.35;
   margin: 0.15rem 0;
+}
+/* Sync mode -- tap a line to record a timestamp against it (js/songsheet.js
+   addSyncPoint). Only lines get the pointer/highlight; the tap area is the
+   whole row so it's forgiving on a phone. */
+.ss-line--syncmode { border-radius: 6px; }
+.ss-line--syncable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+}
+.ss-line--syncable:active { background: color-mix(in srgb, var(--good) 20%, transparent); }
+.ss-line__synctime {
+  align-self: center;
+  margin-left: 0.6rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--good);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .ss-seg {
   display: inline-flex;

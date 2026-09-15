@@ -35,6 +35,7 @@
   }
 
   let ytPlayer = null;
+  let currentVideoId = null; // set while a video is loaded -- read by getSourceKey() for lyric sync
   let progressTimer = null;
   function stopProgressTimer() {
     if (progressTimer != null) {
@@ -52,6 +53,7 @@
       }
       ytPlayer = null;
     }
+    currentVideoId = null;
   }
   function stop() {
     if (ytPlayer && ytPlayer.pauseVideo) {
@@ -61,6 +63,17 @@
         /* not ready yet -- nothing playing to stop */
       }
     }
+  }
+
+  // Read by js/songsheet.js for lyric-sync autoscroll.
+  function getPosition() {
+    if (!ytPlayer || !ytPlayer.getCurrentTime) return null;
+    return ytPlayer.getCurrentTime() * 1000;
+  }
+  // Sync points are stored per video, not per song -- a different YouTube
+  // link for the same song has different timing.
+  function getSourceKey() {
+    return currentVideoId ? "youtube:" + currentVideoId : null;
   }
 
   function el(tag, className, text) {
@@ -199,6 +212,7 @@
 
     loadYtApi().then((YT) => {
       destroyPlayer();
+      currentVideoId = videoId;
       ytPlayer = new YT.Player(mount, {
         videoId,
         width: "100%",
@@ -272,5 +286,5 @@
     window.GuitarAudioDock.registerButton(btn);
   }
 
-  window.GuitarBackingTrack = { stop };
+  window.GuitarBackingTrack = { stop, getPosition, getSourceKey };
 })();

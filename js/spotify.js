@@ -158,6 +158,7 @@
   let player = null;
   let deviceId = null;
   let playerPromise = null;
+  let currentTrackId = null; // set by playSong() -- read by getSourceKey() for lyric sync
   let lastState = null; // most recent player_state_changed payload
   let lastStateAt = 0; // Date.now() when lastState arrived -- see posTicker
   let onStateChange = null; // set by the open panel while it's on screen
@@ -238,6 +239,7 @@
     await ensurePlayer();
     const trackId = await resolveTrackId(song);
     if (!trackId) throw new Error("Kon dit nummer niet vinden op Spotify.");
+    currentTrackId = trackId;
     const res = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
       method: "PUT",
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -254,6 +256,19 @@
   }
   function seekTo(ms) {
     if (player) player.seek(Math.max(0, ms | 0)).catch(() => {});
+  }
+
+  // Read by js/songsheet.js for lyric-sync autoscroll -- same interpolation
+  // renderTick() uses for the now-playing bar's clock, just exposed outside
+  // this closure. null while nothing has ever reported a state yet.
+  function getPosition() {
+    if (!lastState) return null;
+    return lastState.paused ? lastState.position : lastState.position + (Date.now() - lastStateAt);
+  }
+  // Sync points are stored per source *recording*, not per song -- a
+  // different Spotify track for the same song has different timing.
+  function getSourceKey() {
+    return currentTrackId ? "spotify:" + currentTrackId : null;
   }
 
   /* ---------- Fallback search link (unchanged from the old header button) ---------- */
@@ -474,5 +489,5 @@
     window.GuitarAudioDock.registerButton(btn);
   }
 
-  window.GuitarSpotify = { stop, pause };
+  window.GuitarSpotify = { stop, pause, getPosition, getSourceKey };
 })();

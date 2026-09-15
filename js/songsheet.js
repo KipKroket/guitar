@@ -297,9 +297,20 @@
     const rec = readStore(inst)[songId];
     return rec && typeof rec.raw === "string" ? rec : null;
   }
+  // `sync` (lyric-sync timestamps, see the autoscroll section below) is
+  // opt-in per call, not auto-preserved: a caller that changes the raw text
+  // (paste/fetch) omits it and the old line-indexed points are dropped along
+  // with the text they pointed into, while bumpTranspose and the sync
+  // editing itself pass the existing map straight through unchanged.
   function saveSheet(inst, songId, rec) {
     const store = readStore(inst);
-    store[songId] = { raw: rec.raw, source: rec.source || "paste", transpose: rec.transpose | 0, savedAt: Date.now() };
+    store[songId] = {
+      raw: rec.raw,
+      source: rec.source || "paste",
+      transpose: rec.transpose | 0,
+      sync: rec.sync && typeof rec.sync === "object" ? rec.sync : {},
+      savedAt: Date.now(),
+    };
     writeStore(inst, store);
   }
   function deleteSheet(inst, songId) {
@@ -340,6 +351,13 @@
     return level * 8; // 8..80 px/s
   }
 
+  // Per-line char-length weights for the currently rendered sheet (index ==
+  // the same flat line index sync points are stored against) -- rebuilt by
+  // renderSheet() each time, read by computeVirtualLine()'s weighted split
+  // of a gap between two anchors so a long line doesn't scroll past at the
+  // same pace as a short one.
+  let lineWeights = [];
+
   let scrollRAF = null;
   let scrollLastTs = null;
   // Our own float target position, independent of what box.scrollTop
@@ -368,6 +386,128 @@
     scrollWritten = null;
   }
 
+  function writeScroll(box, targetY) {
+    const rounded = Math.round(targetY);
+    if (rounded !== scrollWritten) {
+      if (box.scrollTo) box.scrollTo(0, rounded);
+      else box.scrollTop = rounded;
+      scrollWritten = rounded;
+    }
+  }
+
+  function tickManual(box, ts) {
+    if (scrollPos == null) {
+      scrollPos = box.scrollTop;
+      scrollWritten = scrollPos;
+    } else if (Math.abs(box.scrollTop - scrollWritten) > 1) {
+      // The container moved by more than our own last write -- a manual
+      // scroll (drag/wheel) to nudge the position, since nothing else writes
+      // to this scroll container while autoscroll owns it. Adopt it as the
+      // new base rather than snapping back, so a small correction just
+      // shifts where autoscroll continues from, at the same speed.
+      scrollPos = box.scrollTop;
+      scrollWritten = scrollPos;
+    }
+    if (scrollLastTs != null) {
+      const dt = (ts - scrollLastTs) / 1000;
+      scrollPos += levelToPxPerSec(state.autoscroll.speed) * dt;
+      writeScroll(box, scrollPos);
+      if (scrollPos >= box.scrollHeight - box.clientHeight - 1) {
+        // Reached the bottom -- stop rather than sit there doing nothing.
+        state.autoscroll.on = false;
+        stopAutoscroll();
+        render();
+        return;
+      }
+    }
+    scrollLastTs = ts;
+  }
+
+  // Distributes the gap between two synced lines (lineA..lineB) by each
+  // line's character length rather than splitting it evenly -- a long verse
+  // line takes longer to sing than a short chorus line, so the target
+  // position should move through it more slowly.
+  function interpolateWeighted(lineA, lineB, frac) {
+    if (lineB <= lineA) return lineA;
+    const w = [];
+    let total = 0;
+    for (let i = lineA; i < lineB; i++) {
+      const wt = Math.max(1, lineWeights[i] || 1);
+      w.push(wt);
+      total += wt;
+    }
+    let target = frac * total;
+    let acc = 0;
+    for (let i = 0; i < w.length; i++) {
+      if (target <= acc + w[i]) return lineA + i + (target - acc) / w[i];
+      acc += w[i];
+    }
+    return lineB;
+  }
+
+  // Maps the current playback position to a fractional "virtual line" --
+  // e.g. 4.3 means 30% of the way from line 4 into line 5 -- by finding the
+  // pair of anchors either side of it and interpolating between them.
+  // Before the first anchor / after the last, it keeps extrapolating at that
+  // edge segment's own pace rather than freezing, so a stretch you haven't
+  // tagged yet still drifts forward at a plausible rate instead of stopping
+  // dead. `points` must be sorted ascending by ms (see addSyncPoint).
+  function computeVirtualLine(points, posMs) {
+    const n = points.length;
+    if (posMs <= points[0].ms) {
+      const a = points[0], b = points[1];
+      const pace = (b.line - a.line) / ((b.ms - a.ms) || 1);
+      return Math.max(0, a.line + pace * (posMs - a.ms));
+    }
+    if (posMs >= points[n - 1].ms) {
+      const a = points[n - 2], b = points[n - 1];
+      const pace = (b.line - a.line) / ((b.ms - a.ms) || 1);
+      return b.line + pace * (posMs - b.ms);
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      if (posMs >= a.ms && posMs <= b.ms) {
+        return interpolateWeighted(a.line, b.line, (posMs - a.ms) / ((b.ms - a.ms) || 1));
+      }
+    }
+    return points[0].line;
+  }
+
+  function lineElAt(idx) {
+    return panel ? panel.querySelector('[data-line-idx="' + idx + '"]') : null;
+  }
+
+  // Converts a virtual line position into a scrollTop that puts that line
+  // about a third of the way down the visible area -- a comfortable reading
+  // spot, same idea as a karaoke prompter keeping the current line clear of
+  // the very top edge.
+  function virtualLineToScrollTop(box, virtualLine) {
+    const f = Math.floor(virtualLine);
+    const elF = lineElAt(f);
+    if (!elF) return null;
+    const boxRect = box.getBoundingClientRect();
+    const topF = elF.getBoundingClientRect().top - boxRect.top + box.scrollTop;
+    let topC = topF;
+    const frac = virtualLine - f;
+    if (frac > 0) {
+      const elC = lineElAt(f + 1);
+      if (elC) topC = elC.getBoundingClientRect().top - boxRect.top + box.scrollTop;
+    }
+    return topF + (topC - topF) * frac - box.clientHeight * 0.3;
+  }
+
+  function tickSynced(box, synced) {
+    // Manual pacing's own clock is stale once we're back in manual mode
+    // (forceManual toggled, or playback stopped) -- null it so tickManual
+    // doesn't apply a huge dt built up while synced mode was driving.
+    scrollLastTs = null;
+    const y = virtualLineToScrollTop(box, computeVirtualLine(synced.points, synced.posMs));
+    if (y != null) {
+      scrollPos = y;
+      writeScroll(box, y);
+    }
+  }
+
   function autoscrollTick(ts) {
     const active =
       state && state.expanded && state.record && !state.adding && state.autoscroll.on;
@@ -384,36 +524,10 @@
       return;
     }
     const box = scrollContainer();
-    if (scrollPos == null) {
-      scrollPos = box.scrollTop;
-      scrollWritten = scrollPos;
-    } else if (Math.abs(box.scrollTop - scrollWritten) > 1) {
-      // The container moved by more than our own last write -- a manual
-      // scroll (drag/wheel) to nudge the position, since nothing else writes
-      // to this scroll container while autoscroll owns it. Adopt it as the
-      // new base rather than snapping back, so a small correction just
-      // shifts where autoscroll continues from, at the same speed.
-      scrollPos = box.scrollTop;
-      scrollWritten = scrollPos;
-    }
-    if (scrollLastTs != null) {
-      const dt = (ts - scrollLastTs) / 1000;
-      scrollPos += levelToPxPerSec(state.autoscroll.speed) * dt;
-      const rounded = Math.round(scrollPos);
-      if (rounded !== scrollWritten) {
-        if (box.scrollTo) box.scrollTo(0, rounded);
-        else box.scrollTop = rounded;
-        scrollWritten = rounded;
-      }
-      if (scrollPos >= box.scrollHeight - box.clientHeight - 1) {
-        // Reached the bottom -- stop rather than sit there doing nothing.
-        state.autoscroll.on = false;
-        stopAutoscroll();
-        render();
-        return;
-      }
-    }
-    scrollLastTs = ts;
+    const synced = effectiveSyncedMode();
+    if (synced) tickSynced(box, synced);
+    else tickManual(box, ts);
+    if (!state || !state.autoscroll.on) return; // tickManual may have stopped it (reached the bottom)
     scrollRAF = requestAnimationFrame(autoscrollTick);
   }
 
@@ -423,6 +537,104 @@
     scrollPos = null;
     scrollWritten = null;
     scrollRAF = requestAnimationFrame(autoscrollTick);
+  }
+
+  /* ---- Lyric sync -- ties lyric lines to a Spotify/YouTube position ----
+     Sync points are `{ line, ms }`, kept sorted by ms, stored per source
+     recording (see getSourceKey() in js/spotify.js / js/backingtrack.js) on
+     the sheet record itself -- a different recording of the same song has
+     different timing, and the points are only meaningful alongside the
+     exact line indices of the sheet text they were tapped against (see the
+     saveSheet() comment on why editing the raw text drops them). ---- */
+
+  function getActivePlayback() {
+    if (
+      window.GuitarAudioDock &&
+      window.GuitarAudioDock.isNowPlaying("spotify") &&
+      window.GuitarSpotify &&
+      window.GuitarSpotify.getPosition
+    ) {
+      const key = window.GuitarSpotify.getSourceKey && window.GuitarSpotify.getSourceKey();
+      const ms = window.GuitarSpotify.getPosition();
+      if (key && ms != null) return { key, ms };
+    }
+    if (
+      window.GuitarAudioDock &&
+      window.GuitarAudioDock.isNowPlaying("backingtrack") &&
+      window.GuitarBackingTrack &&
+      window.GuitarBackingTrack.getPosition
+    ) {
+      const key = window.GuitarBackingTrack.getSourceKey && window.GuitarBackingTrack.getSourceKey();
+      const ms = window.GuitarBackingTrack.getPosition();
+      if (key && ms != null) return { key, ms };
+    }
+    return null;
+  }
+
+  // Whether the FAB should offer the "vast tempo" override at all -- i.e.
+  // whether synced autoscroll is even possible right now, regardless of
+  // whether the override is currently forcing manual mode.
+  function hasSyncAvailable() {
+    const active = getActivePlayback();
+    if (!active || !state || !state.record) return false;
+    return ((state.record.sync && state.record.sync[active.key]) || []).length >= 2;
+  }
+
+  // What autoscroll should actually do this frame: null falls back to the
+  // fixed-speed manual tick. Needs at least two points to interpolate
+  // between; the override toggle (forceManual) always wins.
+  function effectiveSyncedMode() {
+    if (!state || !state.record || state.autoscroll.forceManual) return null;
+    const active = getActivePlayback();
+    if (!active) return null;
+    const points = (state.record.sync && state.record.sync[active.key]) || [];
+    if (points.length < 2) return null;
+    return { key: active.key, points, posMs: active.ms };
+  }
+
+  function formatSyncTime(ms) {
+    const s = Math.max(0, Math.round((ms || 0) / 1000));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  function saveSyncPoints(sync) {
+    if (!state || !state.record) return;
+    saveSheet(state.inst, state.song.id, {
+      raw: state.record.raw,
+      source: state.record.source,
+      transpose: state.record.transpose,
+      sync,
+    });
+    state.record = loadSheet(state.inst, state.song.id);
+  }
+
+  function cloneSync(sync) {
+    const out = {};
+    Object.keys(sync || {}).forEach((k) => (out[k] = sync[k].slice()));
+    return out;
+  }
+
+  // Tapping a line that already has a point for the active source just
+  // moves it to the current position -- the same tap is how you both create
+  // a point and correct one you notice has drifted while playing along.
+  function addSyncPoint(lineIdx) {
+    const active = getActivePlayback();
+    if (!active || !state.record) return;
+    const sync = cloneSync(state.record.sync);
+    const arr = (sync[active.key] || []).filter((p) => p.line !== lineIdx);
+    arr.push({ line: lineIdx, ms: Math.round(active.ms) });
+    arr.sort((a, b) => a.ms - b.ms);
+    sync[active.key] = arr;
+    saveSyncPoints(sync);
+    render();
+  }
+
+  function removeSyncPoint(lineIdx, key) {
+    if (!state.record) return;
+    const sync = cloneSync(state.record.sync);
+    sync[key] = (sync[key] || []).filter((p) => p.line !== lineIdx);
+    saveSyncPoints(sync);
+    render();
   }
 
   /* ---- Floating autoscroll control -------------------------------------
@@ -489,6 +701,7 @@
     btn.setAttribute("aria-expanded", state.autoscroll.fabMenuOpen ? "true" : "false");
     btn.setAttribute("aria-label", "Autoscroll");
     if (state.autoscroll.on) btn.classList.add("is-active");
+    if (state.autoscroll.on && effectiveSyncedMode()) btn.classList.add("is-synced");
     btn.innerHTML =
       '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     btn.addEventListener("click", (e) => {
@@ -541,25 +754,47 @@
       toggleRow.appendChild(toggle);
       menu.appendChild(toggleRow);
 
-      const speedWrap = el("label", "songsheet__scroll-speed");
-      const speedHead = el("div", "songsheet__scroll-speed-head");
-      speedHead.appendChild(el("span", null, "Tempo"));
-      const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
-      speedHead.appendChild(speedVal);
-      speedWrap.appendChild(speedHead);
-      const speed = el("input", null);
-      speed.type = "range";
-      speed.min = "1";
-      speed.max = "10";
-      speed.step = "1";
-      speed.value = String(state.autoscroll.speed);
-      speed.addEventListener("input", () => {
-        state.autoscroll.speed = parseInt(speed.value, 10);
-        speedVal.textContent = speed.value;
-      });
-      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
-      speedWrap.appendChild(speed);
-      menu.appendChild(speedWrap);
+      // Only shown once there's actually a choice to make: with sync points
+      // for whatever's currently playing, autoscroll follows the recording
+      // by default -- this is purely the escape hatch back to a fixed pace
+      // (a bad sync, or wanting to drill slower/faster than the recording).
+      if (hasSyncAvailable()) {
+        const modeRow = el("label", "songsheet__scroll-row");
+        modeRow.appendChild(el("span", null, "Vast tempo"));
+        const modeToggle = el("input", "songsheet__scroll-toggle");
+        modeToggle.type = "checkbox";
+        modeToggle.checked = !!state.autoscroll.forceManual;
+        modeToggle.addEventListener("change", () => {
+          state.autoscroll.forceManual = modeToggle.checked;
+          renderFab();
+        });
+        modeRow.appendChild(modeToggle);
+        menu.appendChild(modeRow);
+      }
+
+      if (effectiveSyncedMode()) {
+        menu.appendChild(el("p", "songsheet__scroll-status", "Gesynchroniseerd met afspelen"));
+      } else {
+        const speedWrap = el("label", "songsheet__scroll-speed");
+        const speedHead = el("div", "songsheet__scroll-speed-head");
+        speedHead.appendChild(el("span", null, "Tempo"));
+        const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
+        speedHead.appendChild(speedVal);
+        speedWrap.appendChild(speedHead);
+        const speed = el("input", null);
+        speed.type = "range";
+        speed.min = "1";
+        speed.max = "10";
+        speed.step = "1";
+        speed.value = String(state.autoscroll.speed);
+        speed.addEventListener("input", () => {
+          state.autoscroll.speed = parseInt(speed.value, 10);
+          speedVal.textContent = speed.value;
+        });
+        speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
+        speedWrap.appendChild(speed);
+        menu.appendChild(speedWrap);
+      }
 
       fab.appendChild(menu);
     }
@@ -594,7 +829,8 @@
       fetching: false,
       fetchError: null,
       confirmRemove: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), fabMenuOpen: false },
+      syncMode: false,
+      autoscroll: { on: false, speed: loadScrollSpeed(), fabMenuOpen: false, forceManual: false },
     };
     root.hidden = false;
     render();
@@ -919,6 +1155,23 @@
       });
       secondaryRow.appendChild(clear);
     }
+    const syncBtn = el(
+      "button",
+      "songsheet__btn songsheet__btn--sm" + (state.syncMode ? " is-active" : ""),
+      state.syncMode ? "Klaar met syncen" : "Sync"
+    );
+    syncBtn.type = "button";
+    syncBtn.addEventListener("click", () => {
+      state.syncMode = !state.syncMode;
+      // Tapping lines to place timestamps while the view is also scrolling
+      // out from under you doesn't work -- turn autoscroll off going in.
+      if (state.syncMode && state.autoscroll.on) {
+        state.autoscroll.on = false;
+        stopAutoscroll();
+      }
+      render();
+    });
+    secondaryRow.appendChild(syncBtn);
     bar.appendChild(secondaryRow);
     panel.appendChild(bar);
 
@@ -958,8 +1211,25 @@
       panel.appendChild(card);
     }
 
+    if (state.syncMode) {
+      const activeForHint = getActivePlayback();
+      panel.appendChild(
+        el(
+          "p",
+          "songsheet__sub",
+          activeForHint
+            ? "Tik op de regel die nu klinkt om 'm te koppelen aan dit moment in het nummer. Tik op een tijd-label om die timestamp te verwijderen."
+            : "Start Spotify of een YouTube-backingtrack hierboven om timestamps te kunnen zetten."
+        )
+      );
+    }
+
     /* ---- the sheet body ---- */
     const body = el("div", "songsheet__body");
+    lineWeights = [];
+    let flatLineIdx = 0;
+    const activePlayback = state.syncMode ? getActivePlayback() : null;
+    const activeSyncArr = activePlayback ? (state.record.sync && state.record.sync[activePlayback.key]) || [] : null;
     shown.sections.forEach((section) => {
       const sec = el("div", "ss-section");
       if (section.label) sec.appendChild(el("div", "ss-section__label", section.label));
@@ -968,7 +1238,30 @@
           sec.appendChild(el("div", "ss-break"));
           return;
         }
-        sec.appendChild(renderLine(line));
+        const idx = flatLineIdx++;
+        lineWeights[idx] = Math.max(1, (line.lyric || "").trim().length);
+        const lineEl = renderLine(line);
+        lineEl.dataset.lineIdx = String(idx);
+        if (state.syncMode) {
+          lineEl.classList.add("ss-line--syncmode");
+          const existing = activeSyncArr && activeSyncArr.find((p) => p.line === idx);
+          if (activePlayback) {
+            lineEl.classList.add("ss-line--syncable");
+            lineEl.addEventListener("click", (e) => {
+              e.stopPropagation();
+              addSyncPoint(idx);
+            });
+          }
+          if (existing) {
+            const badge = el("span", "ss-line__synctime", formatSyncTime(existing.ms));
+            badge.addEventListener("click", (e) => {
+              e.stopPropagation();
+              removeSyncPoint(idx, activePlayback.key);
+            });
+            lineEl.appendChild(badge);
+          }
+        }
+        sec.appendChild(lineEl);
       });
       body.appendChild(sec);
     });
@@ -1143,6 +1436,7 @@
       raw: state.record.raw,
       source: state.record.source,
       transpose: next,
+      sync: state.record.sync,
     });
     state.record = loadSheet(state.inst, state.song.id);
     render();
