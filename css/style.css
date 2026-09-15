@@ -1670,6 +1670,41 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+/* Playback-speed button -- text ("1×"/"1.25×") rather than an icon, so it
+   doubles as the current-rate readout without an extra label anywhere. */
+.audio-dock__bar-speed {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.audio-dock__speed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+.audio-dock__speed-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}
+.audio-dock__panel input[type="range"] {
+  width: 100%;
+  accent-color: var(--amber);
+}
 .audio-dock__bar-status {
   flex: 1;
   font-size: 0.8rem;

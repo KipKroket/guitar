@@ -17,6 +17,42 @@
     return m ? m[1] : null;
   }
 
+  // Playback-speed slider (tucked behind a small button on the now-playing
+  // bar) -- one global preference, same idea as SCROLL_SPEED_KEY in
+  // js/songsheet.js, not per-song: it's a "I want everything a bit faster/
+  // slower" habit more than a per-track setting. getPosition() above stays
+  // correct with no changes here -- YT's getCurrentTime() always reports the
+  // real position along the video's own timeline regardless of the rate
+  // it's advancing at, and js/songsheet.js's autoscroll re-reads that live
+  // position every animation frame rather than extrapolating one poll
+  // forward -- so a synced sheet simply keeps tracking wherever the video
+  // actually is, sped up or not.
+  const SPEED_KEY = "guitar-backingtrack-speed";
+  const DEFAULT_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+  function loadSpeed() {
+    const v = parseFloat(localStorage.getItem(SPEED_KEY));
+    return v > 0 ? v : 1;
+  }
+  function saveSpeed(rate) {
+    localStorage.setItem(SPEED_KEY, String(rate));
+  }
+  function formatRate(rate) {
+    return (Math.round(rate * 100) / 100) + "×";
+  }
+  function closestRateIndex(rates, rate) {
+    let best = 0;
+    let bestDiff = Infinity;
+    rates.forEach((r, i) => {
+      const diff = Math.abs(r - rate);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = i;
+      }
+    });
+    return best;
+  }
+
   let ytApiPromise = null;
   function loadYtApi() {
     if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
@@ -36,6 +72,8 @@
 
   let ytPlayer = null;
   let currentVideoId = null; // set while a video is loaded -- read by getSourceKey() for lyric sync
+  let currentRate = 1;
+  let availableRates = DEFAULT_RATES;
   let progressTimer = null;
   function stopProgressTimer() {
     if (progressTimer != null) {
@@ -155,6 +193,21 @@
     time.hidden = true;
     bar.appendChild(time);
 
+    currentRate = loadSpeed();
+    availableRates = DEFAULT_RATES;
+    const speedBtn = el("button", "audio-dock__bar-speed", formatRate(currentRate));
+    speedBtn.type = "button";
+    speedBtn.setAttribute("aria-label", "Playback speed");
+    speedBtn.hidden = true;
+    speedBtn.addEventListener("click", () => {
+      // Same id as editBtn's popover below -- togglePanel treats same-id as
+      // one popover slot for this source, so opening one implicitly closes
+      // the other and the dock button's own is-active highlight (keyed off
+      // that id too) doesn't flicker off while this is open.
+      window.GuitarAudioDock.togglePanel("backingtrack", buildSpeedPanel, null);
+    });
+    bar.appendChild(speedBtn);
+
     const editBtn = el("button", "audio-dock__bar-edit", "");
     editBtn.type = "button";
     editBtn.setAttribute("aria-label", "Change link");
@@ -210,6 +263,41 @@
       else ytPlayer.playVideo();
     });
 
+    function applyRate(rate) {
+      currentRate = rate;
+      speedBtn.textContent = formatRate(rate);
+      saveSpeed(rate);
+      if (ytPlayer && ytPlayer.setPlaybackRate) ytPlayer.setPlaybackRate(rate);
+    }
+
+    // Small popover behind speedBtn -- same idea as the "Tempo" slider in
+    // js/songsheet.js's autoscroll FAB menu, just for the video itself
+    // instead of the scroll pace. Steps over whatever rates this video
+    // actually supports (YT.Player.getAvailablePlaybackRates(), read once
+    // the player's ready) rather than assuming every rate in DEFAULT_RATES
+    // works everywhere.
+    function buildSpeedPanel() {
+      const wrap = el("div", "audio-dock__panel");
+      const head = el("div", "audio-dock__speed-head");
+      head.appendChild(el("span", null, "Snelheid"));
+      const valEl = el("span", "audio-dock__speed-val", formatRate(currentRate));
+      head.appendChild(valEl);
+      wrap.appendChild(head);
+      const slider = el("input", null);
+      slider.type = "range";
+      slider.min = "0";
+      slider.max = String(availableRates.length - 1);
+      slider.step = "1";
+      slider.value = String(closestRateIndex(availableRates, currentRate));
+      slider.addEventListener("input", () => {
+        const rate = availableRates[parseInt(slider.value, 10)];
+        applyRate(rate);
+        valEl.textContent = formatRate(rate);
+      });
+      wrap.appendChild(slider);
+      return wrap;
+    }
+
     loadYtApi().then((YT) => {
       destroyPlayer();
       currentVideoId = videoId;
@@ -226,7 +314,21 @@
             playPause.hidden = false;
             progress.hidden = false;
             time.hidden = false;
+            speedBtn.hidden = false;
+            if (ytPlayer.getAvailablePlaybackRates) {
+              const rates = ytPlayer.getAvailablePlaybackRates();
+              if (rates && rates.length) availableRates = rates.slice().sort((a, b) => a - b);
+            }
+            if (currentRate !== 1) ytPlayer.setPlaybackRate(currentRate);
             tick(); // duration (and 0:00) is available as soon as it's cued, not just once playing starts
+          },
+          onPlaybackRateChange: (e) => {
+            // Also fires for a rate *we* just requested -- keeps the button
+            // label correct even if YouTube snapped it to a different
+            // supported rate than the one asked for.
+            currentRate = e.data;
+            speedBtn.textContent = formatRate(currentRate);
+            saveSpeed(currentRate);
           },
           onStateChange: (e) => {
             const playing = e.data === YT.PlayerState.PLAYING;

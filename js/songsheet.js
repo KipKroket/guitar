@@ -117,6 +117,37 @@
     return { lyric, chords };
   }
 
+  // A line that's mostly lyrics but has a chord-looking word stuck in the
+  // middle -- e.g. copy-pasted from a site that positions chords with CSS
+  // rather than a real chord line, so the vertical alignment is lost and
+  // the chord token just lands in the running text. Lift any such token out
+  // as an inline chord at that spot and close the gap to one space, same as
+  // between two ordinary words. Bare "A" is skipped -- it's the one chord
+  // name that's also a common English word, so it's left as lyric text
+  // rather than risk mangling a real line.
+  function extractInlineChords(raw) {
+    const parts = raw.split(/(\s+)/);
+    const chords = [];
+    let lyric = "";
+    let pendingSpace = false;
+    for (const part of parts) {
+      if (!part) continue;
+      if (/^\s+$/.test(part)) {
+        pendingSpace = true;
+        continue;
+      }
+      if (part !== "A" && isChordToken(part)) {
+        chords.push({ sym: part, index: lyric.length });
+        pendingSpace = true;
+        continue;
+      }
+      if (pendingSpace && lyric) lyric += " ";
+      lyric += part;
+      pendingSpace = false;
+    }
+    return { lyric, chords };
+  }
+
   function parseDirective(raw, ctx) {
     const m = raw.trim().match(/^\{\s*([a-z_]+)\s*:?\s*([^}]*)\}$/i);
     if (!m) return false;
@@ -198,7 +229,7 @@
         continue;
       }
 
-      ensureSection().lines.push({ lyric: raw.replace(/\s+$/, ""), chords: [] });
+      ensureSection().lines.push(extractInlineChords(raw));
     }
 
     // Drop a trailing empty section and trailing paragraph breaks.
