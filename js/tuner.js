@@ -98,10 +98,20 @@ function mpmDetect(buffer, sampleRate) {
   }
 
   // Take the local maximum of each positive hump of the NSDF, keeping only
-  // humps whose peak lag falls within the valid string-frequency range.
+  // humps whose peak lag falls within the valid string-frequency range. We
+  // used to pre-skip the initial positive run starting at lag 1 outright,
+  // on the assumption it was always "the trivial hump at zero lag" and
+  // never contained the true period. That assumption breaks for the
+  // highest string: open high E's period (~134-146 samples) is short
+  // enough that, for a clean tone with a strong fundamental and weak
+  // harmonics, the NSDF sometimes doesn't dip negative at all between lag 1
+  // and the true period -- so the pre-skip swallowed the only hump that
+  // mattered, every single frame, and the string never registered at all.
+  // The minLag check below already rejects genuinely trivial near-zero-lag
+  // humps (anything shorter than the shortest valid string period), so it's
+  // the only filter needed -- no separate pre-skip.
   const humps = [];
   let l = 1;
-  while (l <= maxLag && nsdf[l] > 0) l++; // skip the trivial hump at zero lag
   while (l <= maxLag) {
     while (l <= maxLag && nsdf[l] <= 0) l++;
     let humpMax = -1, humpArg = -1;

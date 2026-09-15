@@ -32,6 +32,8 @@
   const NEAR_ENTER_CENTS = 15;     // enter the quiet "near" zone once this close
   const NEAR_EXIT_CENTS = 20;      // only leave the "near" zone once this far off again (hysteresis)
   const DIRECTION_DEBOUNCE_MS = 350; // how long a direction must hold before the hint switches
+  const ONSET_AGREE_CENTS = 25;    // how close two consecutive raw readings must be before a fresh
+                                    // pluck is trusted to seed the filters -- see settleRawCents()
 
   /* ---------- Bottom nav height (for the overlays -- see .overlay in CSS) ---------- */
   // The overlays (search / song detail) stop above the bottom nav instead of
@@ -528,6 +530,7 @@
   let committedDirection = null;  // "up" | "down" | null
   let pendingDirection = null;
   let pendingDirectionSince = 0;
+  let settleCandidate = null;     // last raw reading not yet confirmed by a second, agreeing one
 
   function resetSession() {
     currentTargetIndex = 0;
@@ -564,6 +567,25 @@
     committedDirection = null;
     pendingDirection = null;
     pendingDirectionSince = 0;
+    settleCandidate = null;
+  }
+
+  // Returns a trustworthy cents value once two consecutive raw readings land
+  // within ONSET_AGREE_CENTS of each other, else null. A lone raw reading --
+  // especially the very first frame of a fresh pluck -- is often thrown
+  // wildly off by the attack transient (broadband pick/string noise the
+  // pitch detector briefly mistakes for a period). Seeding the filters
+  // directly off that one reading is what made the meter swing hard on the
+  // first strike and, worse, poisoned the slow hold filter used for
+  // confirming: once seeded off a bad reading, later correct-but-far-off
+  // readings got rejected as *outliers* against that bad seed and needed
+  // many more good frames -- often another whole strike -- to out-vote it
+  // (see HOLD_OUTLIER_GATE_CENTS), which looked like "this string won't
+  // confirm" even while the fast needle already showed it in tune.
+  function settleRawCents(rawCents) {
+    const agrees = settleCandidate !== null && Math.abs(rawCents - settleCandidate) <= ONSET_AGREE_CENTS;
+    settleCandidate = rawCents;
+    return agrees ? rawCents : null;
   }
 
   /* ---------- String chips ---------- */
@@ -746,6 +768,7 @@
       outOfTuneSince = null;
       smoothedCents = null;
       holdCents = null;
+      settleCandidate = null;
       noteNameEl.classList.remove("in-tune");
       if (!confirmedForTarget) {
         setHint("Listening… play a single string.");
@@ -766,7 +789,19 @@
     const targetFreq = tuning.strings[currentTargetIndex];
     const targetNote = freqToNote(targetFreq);
     const rawCents = 1200 * Math.log2(result.frequency / targetFreq);
-    smoothedCents = smoothedCents === null ? rawCents : smoothedCents + CENTS_SMOOTHING * (rawCents - smoothedCents);
+
+    if (smoothedCents === null) {
+      // Fresh start for this string (or right after a dropout cleared the
+      // filters) -- don't trust a lone raw reading to seed either filter.
+      // See settleRawCents() for why.
+      const settled = settleRawCents(rawCents);
+      if (settled === null) return;
+      smoothedCents = settled;
+      holdCents = settled;
+      holdOutlierStreak = 0;
+    } else {
+      smoothedCents = smoothedCents + CENTS_SMOOTHING * (rawCents - smoothedCents);
+    }
     const cents = Math.round(smoothedCents);
 
     noteNameTextEl.textContent = `${targetNote.name}${targetNote.octave}`;
@@ -779,10 +814,7 @@
     // fast filter; this one deliberately lags behind so an isolated bad
     // reading (an octave slip from the pitch detector, a stray harmonic,
     // pick noise) barely moves it and can't stall or restart the hold.
-    if (holdCents === null) {
-      holdCents = rawCents;
-      holdOutlierStreak = 0;
-    } else if (Math.abs(rawCents - holdCents) <= HOLD_OUTLIER_GATE_CENTS) {
+    if (Math.abs(rawCents - holdCents) <= HOLD_OUTLIER_GATE_CENTS) {
       holdCents = holdCents + HOLD_SMOOTHING * (rawCents - holdCents);
       holdOutlierStreak = 0;
     } else {
