@@ -324,6 +324,76 @@
     return Boolean(svg) || piano;
   }
 
+  /* ---------------- Swap picker ----------------
+     Used by the song sheet's "swap this chord" button (js/songsheet.js): a
+     compact root+quality grid, independent of the #chord-roots/#chord-types
+     page wiring below, rendered into whatever container the caller gives
+     it. Live-updates a diagram preview via renderInto() as the pick
+     changes; only calls onApply(symbol) once the user confirms, so nothing
+     changes in the sheet just from browsing options. `symbol` is always a
+     bare root+suffix from NOTES/QUALITIES (no slash bass -- a swap is for
+     an easier voicing, not a reharmonisation onto a different bass note). */
+  function renderSwapPicker(container, initialSymbol, onApply) {
+    const parsed = parseSymbol(initialSymbol) || { rootIdx: 0, qualityKey: "maj" };
+    let rootIdx = parsed.rootIdx;
+    let qualityKey = parsed.qualityKey;
+
+    container.textContent = "";
+
+    const roots = document.createElement("div");
+    roots.className = "chord-roots";
+    NOTES.forEach((n, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chord-chip";
+      b.textContent = n;
+      b.addEventListener("click", () => {
+        rootIdx = i;
+        renderPreview();
+      });
+      roots.appendChild(b);
+    });
+    container.appendChild(roots);
+
+    const types = document.createElement("div");
+    types.className = "chord-types";
+    QUALITIES.forEach((q) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chord-chip chord-chip--type";
+      b.textContent = q.label;
+      b.dataset.key = q.key;
+      b.addEventListener("click", () => {
+        qualityKey = q.key;
+        renderPreview();
+      });
+      types.appendChild(b);
+    });
+    container.appendChild(types);
+
+    const preview = document.createElement("div");
+    preview.className = "mini-chord";
+    container.appendChild(preview);
+
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "songsheet__btn songsheet__btn--primary songsheet__btn--sm";
+    apply.textContent = "Use this chord";
+    apply.addEventListener("click", () => onApply(currentSymbol()));
+    container.appendChild(apply);
+
+    function currentSymbol() {
+      const q = QUALITIES.find((qq) => qq.key === qualityKey) || QUALITIES[0];
+      return NOTES[rootIdx] + q.suffix;
+    }
+    function renderPreview() {
+      Array.from(roots.children).forEach((b, i) => b.classList.toggle("is-active", i === rootIdx));
+      Array.from(types.children).forEach((b) => b.classList.toggle("is-active", b.dataset.key === qualityKey));
+      renderInto(preview, currentSymbol());
+    }
+    renderPreview();
+  }
+
   /* ---------------- Wiring ---------------- */
   const rootsEl = document.getElementById("chord-roots");
   const typesEl = document.getElementById("chord-types");
@@ -408,6 +478,6 @@
 
   // app.js calls this when the Chords tab is shown; render once now too so the
   // page is ready if it's opened before any instrument change.
-  window.GuitarChords = { refresh: render, renderInto: renderInto };
+  window.GuitarChords = { refresh: render, renderInto: renderInto, renderSwapPicker: renderSwapPicker };
   render();
 })();

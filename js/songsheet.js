@@ -422,6 +422,7 @@
       if (scrollPos >= box.scrollHeight - box.clientHeight - 1) {
         // Reached the bottom -- stop rather than sit there doing nothing.
         state.autoscroll.on = false;
+        state.autoscroll.menuOpen = false;
         stopAutoscroll();
         render();
         return;
@@ -526,6 +527,7 @@
       // nothing actually moving.
       if (state && state.autoscroll && state.autoscroll.on) {
         state.autoscroll.on = false;
+        state.autoscroll.menuOpen = false;
         render();
       }
       return;
@@ -682,11 +684,16 @@
      the bottom nav. Shown whenever the sheet is expanded and has lyrics to
      scroll through. A tap is a plain play/pause: it starts or stops
      scrolling directly, picking synced-vs-fixed mode automatically from
-     whether there's anything to sync to (see hasSyncAvailable()). The
-     small panel above the button is not a separate open/close menu -- it
-     just mirrors the "on" state, showing the tempo slider (or "Synced with
-     playback") and, only when there's an actual choice to make, the
-     Autoscroll/Fixed tempo mode picker. ---- */
+     whether there's anything to sync to (see hasSyncAvailable()) -- so
+     autoscroll is always usable with just this one button, no menu
+     involved. Once it's running, a second, smaller button appears next to
+     it (state.autoscroll.menuOpen) that opens/closes the small panel above
+     showing the tempo slider (or "Synced with playback") and, only when
+     there's an actual choice to make, the Autoscroll/Fixed tempo mode
+     picker -- an explicit toggle rather than something tied to "on", so
+     starting autoscroll never pops the panel open unasked. The menu always
+     starts closed again the next time autoscroll is turned on (same
+     "reopen = start collapsed" pattern as the panel itself). ---- */
 
   let fab = null;
 
@@ -717,6 +724,25 @@
     }
     fab.textContent = "";
 
+    // Only present once autoscroll is actually running -- toggles the menu
+    // below without touching on/off at all, so the big button stays a
+    // plain, one-tap play/pause regardless of whether the menu is open.
+    if (state.autoscroll.on) {
+      const menuBtn = el("button", "songsheet__fab-menu-btn", null);
+      menuBtn.type = "button";
+      menuBtn.setAttribute("aria-pressed", state.autoscroll.menuOpen ? "true" : "false");
+      menuBtn.setAttribute("aria-label", state.autoscroll.menuOpen ? "Hide autoscroll settings" : "Autoscroll settings");
+      if (state.autoscroll.menuOpen) menuBtn.classList.add("is-active");
+      menuBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="7" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="12" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="17" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/></svg>';
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.autoscroll.menuOpen = !state.autoscroll.menuOpen;
+        renderFab();
+      });
+      fab.appendChild(menuBtn);
+    }
+
     const btn = el("button", "songsheet__fab-btn", null);
     btn.type = "button";
     btn.setAttribute("aria-pressed", state.autoscroll.on ? "true" : "false");
@@ -729,6 +755,7 @@
       e.stopPropagation();
       if (state.autoscroll.on) {
         state.autoscroll.on = false;
+        state.autoscroll.menuOpen = false;
         stopAutoscroll();
       } else {
         // Pick the pace automatically: follow the recording when there's
@@ -741,7 +768,7 @@
     });
     fab.appendChild(btn);
 
-    if (state.autoscroll.on) {
+    if (state.autoscroll.on && state.autoscroll.menuOpen) {
       const menu = el("div", "songsheet__fab-menu");
 
       // Only shown once there's actually a choice to make: with sync points
@@ -832,7 +859,7 @@
       confirmRemove: false,
       syncMode: false,
       confirmClearSync: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false },
+      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false, menuOpen: false },
     };
     root.hidden = false;
     render();
@@ -1316,6 +1343,7 @@
       // out from under you doesn't work -- turn autoscroll off going in.
       if (state.syncMode && state.autoscroll.on) {
         state.autoscroll.on = false;
+        state.autoscroll.menuOpen = false;
         stopAutoscroll();
       }
       render();
@@ -1336,24 +1364,76 @@
       const card = el("div", "songsheet__chipcard");
       card.hidden = true;
       let openSym = null;
+      let swapMode = false;
+
+      function renderCard() {
+        card.textContent = "";
+        if (!openSym) return;
+        const head = el("div", "songsheet__chipcard-head");
+        if (swapMode) {
+          const back = el("button", "songsheet__chip-swap", null);
+          back.type = "button";
+          back.setAttribute("aria-label", "Cancel swap");
+          back.innerHTML =
+            '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          back.addEventListener("click", (e) => {
+            e.stopPropagation();
+            swapMode = false;
+            renderCard();
+          });
+          head.appendChild(back);
+          head.appendChild(el("span", "songsheet__chipcard-title", "Swap " + openSym + " for…"));
+          card.appendChild(head);
+
+          const pickerHost = el("div", "songsheet__swap-picker");
+          card.appendChild(pickerHost);
+          if (window.GuitarChords && window.GuitarChords.renderSwapPicker) {
+            window.GuitarChords.renderSwapPicker(pickerHost, openSym, (newSym) => {
+              swapChord(openSym, newSym);
+            });
+          }
+        } else {
+          const swap = el("button", "songsheet__chip-swap", null);
+          swap.type = "button";
+          swap.title = "Swap this chord";
+          swap.setAttribute("aria-label", "Swap this chord");
+          swap.innerHTML =
+            '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h13l-3-3M20 17H7l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          swap.addEventListener("click", (e) => {
+            e.stopPropagation();
+            swapMode = true;
+            renderCard();
+          });
+          head.appendChild(swap);
+          card.appendChild(head);
+
+          const inner = el("div", "songsheet__chipcard-inner");
+          card.appendChild(inner);
+          const ok = window.GuitarChords && window.GuitarChords.renderInto
+            ? window.GuitarChords.renderInto(inner, openSym)
+            : false;
+          if (!ok && !inner.textContent) inner.textContent = "No diagram for " + openSym + ".";
+        }
+      }
+
       chordSyms.forEach((sym) => {
         const chip = el("button", "songsheet__chip", sym);
         chip.type = "button";
         chip.addEventListener("click", () => {
           if (openSym === sym) {
             openSym = null;
+            swapMode = false;
             card.hidden = true;
             chip.classList.remove("is-active");
+            renderCard();
             return;
           }
           openSym = sym;
+          swapMode = false;
           Array.from(chips.children).forEach((c) => c.classList.remove("is-active"));
           chip.classList.add("is-active");
           card.hidden = false;
-          const ok = window.GuitarChords && window.GuitarChords.renderInto
-            ? window.GuitarChords.renderInto(card, sym)
-            : false;
-          if (!ok && !card.textContent) card.textContent = "No diagram for " + sym + ".";
+          renderCard();
         });
         chips.appendChild(chip);
       });
@@ -1596,6 +1676,76 @@
       wrap.appendChild(seg);
     }
     return wrap;
+  }
+
+  /* ---- Chord swap -- replace every occurrence of one chord with another --
+     Triggered from the chip card's "swap" button (renderSheet below). Works
+     against the RAW stored text, not the rendered model, so the change
+     survives a transpose and a re-open. `oldSym`/`newSym` are both as
+     currently DISPLAYED (i.e. already transposed) -- collectRawSymsFor()
+     maps that back to whatever literal token(s) actually appear in the raw
+     text for that chord, and the new symbol is transposed backward by the
+     current offset before being written in, so it lands on the same pitch
+     the user picked once the existing transpose is re-applied on render
+     (see transposeSym -- shiftNote always re-derives a note purely from its
+     semitone index, so the exact spelling written to raw is invisible once
+     forward-transposed again; irrelevant when transpose is 0, which is the
+     common case and needs no round-trip at all). ---- */
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // Every literal raw chord token whose transposed form equals `displayedSym`
+  // -- usually exactly one, but a hand-typed sheet could spell the same
+  // chord two different ways in different spots.
+  function collectRawSymsFor(model, shown, displayedSym) {
+    const out = new Set();
+    model.sections.forEach((s, si) => {
+      s.lines.forEach((l, li) => {
+        if (!l) return;
+        const shownLine = shown.sections[si].lines[li];
+        l.chords.forEach((c, ci) => {
+          if (shownLine.chords[ci].sym === displayedSym) out.add(c.sym);
+        });
+      });
+    });
+    return out;
+  }
+
+  // Replaces one exact chord token throughout the raw text: a ChordPro
+  // "[Am]" bracket (any line), or a bare token on a line the parser itself
+  // would recognise as a chord line (isChordLine) -- never inside plain
+  // lyric text, so a lyric that happens to contain the same letters (e.g.
+  // the word "am") is left alone.
+  function replaceChordInRaw(raw, oldSym, newSym) {
+    if (!oldSym || oldSym === newSym) return raw;
+    const oldEsc = escapeRegExp(oldSym);
+    let out = raw.replace(new RegExp("\\[" + oldEsc + "\\]", "g"), "[" + newSym + "]");
+    const tokenRe = new RegExp("(^|\\s)" + oldEsc + "(?=\\s|$)", "g");
+    out = out
+      .split("\n")
+      .map((line) => (isChordLine(line) ? line.replace(tokenRe, "$1" + newSym) : line))
+      .join("\n");
+    return out;
+  }
+
+  function swapChord(oldDisplayedSym, newDisplayedSym) {
+    if (!state || !state.record || !newDisplayedSym || oldDisplayedSym === newDisplayedSym) return;
+    const model = parseSheet(state.record.raw);
+    const semis = state.record.transpose | 0;
+    const shown = transposeModel(model, semis);
+    const rawSyms = collectRawSymsFor(model, shown, oldDisplayedSym);
+    if (!rawSyms.size) return;
+    const preferFlat = FLAT_KEYS.has((model.meta.key || "").trim()) || semis < 0;
+    const newRawSym = semis ? transposeSym(newDisplayedSym, -semis, preferFlat) : newDisplayedSym;
+    let raw = state.record.raw;
+    rawSyms.forEach((oldRawSym) => {
+      raw = replaceChordInRaw(raw, oldRawSym, newRawSym);
+    });
+    saveSheet(state.inst, state.song.id, { raw, source: state.record.source, transpose: semis });
+    state.record = loadSheet(state.inst, state.song.id);
+    render();
   }
 
   function bumpTranspose(delta) {

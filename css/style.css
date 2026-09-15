@@ -1376,6 +1376,32 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   right: calc(1.1rem + env(safe-area-inset-right));
   bottom: calc(100% + 0.85rem);
   z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* Only present while autoscroll is on -- opens/closes .songsheet__fab-menu
+   without touching on/off, so the big button underneath stays a plain
+   one-tap play/pause either way. */
+.songsheet__fab-menu-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.songsheet__fab-menu-btn:active { transform: translateY(1px); }
+.songsheet__fab-menu-btn.is-active {
+  border-color: var(--amber-deep);
+  background: var(--amber);
+  color: var(--bg);
 }
 .songsheet__fab-btn {
   width: 50px;
@@ -1689,6 +1715,37 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   text-align: center;
 }
 .songsheet__chipcard[hidden] { display: none; }
+.songsheet__chipcard-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.songsheet__chipcard-title {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+.songsheet__chip-swap {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.songsheet__chip-swap:active { transform: translateY(1px); }
+/* No title next to it (the plain diagram view, not the swap picker) --
+   push the lone button to the right instead of leaving it stranded left. */
+.songsheet__chipcard-head .songsheet__chip-swap:only-child { margin-left: auto; }
+.songsheet__swap-picker { text-align: left; }
+.songsheet__swap-picker .mini-chord { margin: 0.8rem 0; }
+.songsheet__swap-picker .songsheet__btn { width: 100%; }
 .mini-chord__name {
   font-family: var(--font-display);
   font-size: 1.5rem;

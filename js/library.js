@@ -216,7 +216,7 @@
       syncedBadge.className = "song-item__synced";
       syncedBadge.setAttribute("aria-label", "Lyrics timed to playback");
       syncedBadge.innerHTML =
-        '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M10 2h4M12 2v2.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 9v4l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3.2 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       li.appendChild(syncedBadge);
     }
 
