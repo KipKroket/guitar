@@ -75,10 +75,20 @@ function mpmDetect(buffer, sampleRate) {
   }
   const totalSq = cumSq[SIZE];
 
-  // NSDF over the useful lag range only -- for guitar that's ~100..735
-  // samples, so this is actually less work than the old full O(n^2) ACF.
+  // NSDF from lag 1 -- NOT from minLag. Starting at minLag used to make the
+  // hump-finder below mistake the rising edge of the true fundamental's peak
+  // for "a partial hump sitting at the start of the range" and discard it
+  // outright, whenever the target period was short enough to land close to
+  // minLag -- which is exactly the case for the open high E string (period
+  // ~134-146 samples against a minLag of ~100-110). That string's real peak
+  // was getting thrown away every time, leaving only a weaker harmonic hump
+  // that often fell below MPM_CLARITY_MIN -- read as "no pitch" and a meter
+  // that never moved. Computing from lag 1 lets the hump-finder see the
+  // actual boundary of the trivial zero-lag lobe instead of an arbitrary
+  // frequency-based cutoff; minLag/maxLag are applied afterwards, only to
+  // filter which hump we're allowed to pick.
   const nsdf = new Float64Array(maxLag + 1);
-  for (let lag = minLag; lag <= maxLag; lag++) {
+  for (let lag = 1; lag <= maxLag; lag++) {
     let ac = 0;
     for (let i = 0; i < SIZE - lag; i++) {
       ac += (buffer[i] - mean) * (buffer[i + lag] - mean);
@@ -87,10 +97,11 @@ function mpmDetect(buffer, sampleRate) {
     nsdf[lag] = denom > 0 ? (2 * ac) / denom : 0;
   }
 
-  // Take the local maximum of each positive hump of the NSDF.
+  // Take the local maximum of each positive hump of the NSDF, keeping only
+  // humps whose peak lag falls within the valid string-frequency range.
   const humps = [];
-  let l = minLag;
-  while (l <= maxLag && nsdf[l] > 0) l++; // skip a partial hump sitting at the start of the range
+  let l = 1;
+  while (l <= maxLag && nsdf[l] > 0) l++; // skip the trivial hump at zero lag
   while (l <= maxLag) {
     while (l <= maxLag && nsdf[l] <= 0) l++;
     let humpMax = -1, humpArg = -1;
@@ -98,7 +109,7 @@ function mpmDetect(buffer, sampleRate) {
       if (nsdf[l] > humpMax) { humpMax = nsdf[l]; humpArg = l; }
       l++;
     }
-    if (humpArg !== -1) humps.push({ arg: humpArg, val: humpMax });
+    if (humpArg !== -1 && humpArg >= minLag) humps.push({ arg: humpArg, val: humpMax });
   }
   if (humps.length === 0) return -1;
 
