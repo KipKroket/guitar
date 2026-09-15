@@ -474,10 +474,25 @@
     }
   }
 
+  // js/chorddetect.js needs "which pitch classes make up this chord" to
+  // build a match template -- reuses the same symbol parser as the
+  // diagrams rather than re-deriving root/quality from scratch.
+  function pitchClasses(symbol) {
+    const parsed = parseSymbol(symbol);
+    if (!parsed) return null;
+    const quality = QUALITIES.find((q) => q.key === parsed.qualityKey) || QUALITIES[0];
+    return quality.intervals.map((iv) => (parsed.rootIdx + iv) % 12);
+  }
+
   document.addEventListener("instrumentchange", render);
 
   // app.js calls this when the Chords tab is shown; render once now too so the
   // page is ready if it's opened before any instrument change.
-  window.GuitarChords = { refresh: render, renderInto: renderInto, renderSwapPicker: renderSwapPicker };
+  window.GuitarChords = {
+    refresh: render,
+    renderInto: renderInto,
+    renderSwapPicker: renderSwapPicker,
+    pitchClasses: pitchClasses,
+  };
   render();
 })();

@@ -1831,7 +1831,8 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 /* Sync mode -- tap a line to record a timestamp against it (js/songsheet.js
    addSyncPoint). Only lines get the pointer/highlight; the tap area is the
-   whole row so it's forgiving on a phone. */
+   whole row so it's forgiving on a phone. Play along reuses the same
+   .ss-line--syncable affordance for its own tap-to-jump override. */
 .ss-line--syncmode { border-radius: 6px; }
 .ss-line--syncable {
   cursor: pointer;
@@ -1888,6 +1889,16 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   background: var(--amber);
   color: var(--bg);
   text-decoration: none;
+}
+
+/* Play along's "you're here" marker (js/songsheet.js renderLine, driven by
+   js/chorddetect.js) -- a distinct color from the tap-popover's amber
+   .is-active above since both can be true on different chords at once. */
+.ss-seg__chord--playalong {
+  background: var(--good);
+  color: var(--bg);
+  text-decoration: none;
+  border-radius: 3px;
 }
 
 /* The floating chord diagram opened by tapping an inline chord -- a

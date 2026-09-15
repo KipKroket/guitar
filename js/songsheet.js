@@ -704,6 +704,129 @@
     render();
   }
 
+  /* ---- Play along --------------------------------------------------------
+     Listens to the mic (js/chorddetect.js) and moves a marker through the
+     song's own chord progression as you actually play it -- no backing
+     track, no timestamps, entirely separate from sync mode/autoscroll
+     above. Mutually exclusive with sync mode (both repurpose tapping a
+     line) and with autoscroll (both move things while you're trying to
+     read); entering one turns the others off, same precedent sync mode
+     already sets for autoscroll. ---- */
+
+  // Flattens the chord progression into ordered "steps" for play-along --
+  // consecutive repeats of the same chord (held across two lines, say)
+  // collapse into one step, same as js/chorddetect.js does internally, so
+  // the two stay index-for-index in sync. Each step remembers every
+  // occurrence (line + position within that line) it was collapsed from,
+  // so all of them can be highlighted while that step is current -- see
+  // the stepKey lookup in renderLine().
+  function buildChordSteps(shown) {
+    const steps = [];
+    let lineIdx = 0;
+    shown.sections.forEach((section) => {
+      section.lines.forEach((line) => {
+        if (line == null) return;
+        line.chords
+          .slice()
+          .sort((a, b) => a.index - b.index)
+          .filter((c) => /^[A-G]/.test(c.sym.trim()))
+          .forEach((c, order) => {
+            const last = steps[steps.length - 1];
+            if (last && last.sym === c.sym) last.occurrences.push({ lineIdx, order });
+            else steps.push({ sym: c.sym, occurrences: [{ lineIdx, order }] });
+          });
+        lineIdx += 1;
+      });
+    });
+    return steps;
+  }
+
+  function stopPlayAlong() {
+    if (!state) return;
+    if (state.playAlong.detector) state.playAlong.detector.stop();
+    state.playAlong.on = false;
+    state.playAlong.detector = null;
+    state.playAlong.steps = null;
+    state.playAlong.index = 0;
+    state.playAlong.error = null;
+  }
+
+  async function startPlayAlong() {
+    const model = parseSheet(state.record.raw);
+    const shown = transposeModel(model, state.record.transpose | 0);
+    const steps = buildChordSteps(shown);
+    if (!steps.length) return;
+
+    if (state.syncMode) {
+      state.syncMode = false;
+      state.confirmClearSync = false;
+    }
+    if (state.autoscroll.on) {
+      state.autoscroll.on = false;
+      state.autoscroll.menuOpen = false;
+      stopAutoscroll();
+    }
+
+    state.playAlong.steps = steps;
+    state.playAlong.index = 0;
+    state.playAlong.error = null;
+    state.playAlong.on = true; // optimistic -- render() shows "listening…" while getUserMedia resolves
+    render();
+
+    if (!window.PlayAlongEngine) {
+      state.playAlong.on = false;
+      state.playAlong.error = "Play along isn't available.";
+      render();
+      return;
+    }
+    try {
+      const detector = new window.PlayAlongEngine.PlayAlongDetector(steps.map((s) => s.sym));
+      state.playAlong.detector = detector;
+      await detector.start((newIndex) => {
+        if (!state || !state.playAlong.on || state.playAlong.detector !== detector) return;
+        state.playAlong.index = newIndex;
+        render();
+      });
+    } catch (err) {
+      console.error("Play along mic error:", err);
+      state.playAlong.on = false;
+      state.playAlong.detector = null;
+      state.playAlong.error = "Couldn't access the microphone.";
+      render();
+    }
+  }
+
+  function togglePlayAlong() {
+    if (state.playAlong.on) {
+      stopPlayAlong();
+      render();
+    } else {
+      startPlayAlong();
+    }
+  }
+
+  // Manual override for whenever the detector guesses wrong or gets stuck
+  // -- tapping a lyric line jumps to wherever you'd naturally continue
+  // from there: the first chord that starts on that exact line, if it has
+  // one, so a line with several chord changes on it (a chorus opener like
+  // "C G D") lands you on the first of those, not the last; otherwise the
+  // most recent chord established by an earlier line. No separate
+  // next/previous controls needed.
+  function jumpPlayAlongTo(lineIdx) {
+    if (!state.playAlong.on || !state.playAlong.steps) return;
+    const steps = state.playAlong.steps;
+    let target = 0;
+    let onThisLine = -1;
+    for (let i = 0; i < steps.length; i++) {
+      if (onThisLine === -1 && steps[i].occurrences.some((o) => o.lineIdx === lineIdx)) onThisLine = i;
+      if (steps[i].occurrences[0].lineIdx <= lineIdx) target = i;
+    }
+    if (onThisLine !== -1) target = onThisLine;
+    if (state.playAlong.detector) state.playAlong.detector.jumpTo(target);
+    state.playAlong.index = target;
+    render();
+  }
+
   /* ---- Floating autoscroll control -------------------------------------
      A small round button pinned to the bottom-right of the app shell
      (position: absolute against .app -- a plain child of it, not of
@@ -891,6 +1014,7 @@
       syncMode: false,
       confirmClearSync: false,
       autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false, menuOpen: false },
+      playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
     };
     root.hidden = false;
     render();
@@ -898,6 +1022,7 @@
 
   function close() {
     stopAutoscroll();
+    stopPlayAlong();
     closeInlineChordPopover();
     state = null;
     panel = null;
@@ -1186,11 +1311,48 @@
     const form = el("div", "songsheet__editor");
 
     // Auto-fetch is still offered here -- both as the recovery path after a
-    // failed fetch and as an alternative to typing.
+    // failed fetch and as an alternative to typing. Remove lives here too
+    // now (not on the normal sheet view) -- it's a rare, destructive action
+    // that only makes sense once you're already in "editing this sheet"
+    // mode, so it no longer has to compete for space with Edit/Sync/Play
+    // along on every visit.
     renderFetchStatus(form);
-    if (((state.song && state.song.title) || "").trim()) {
+    const hasTitle = ((state.song && state.song.title) || "").trim() !== "";
+    if (hasTitle || state.record) {
       const fr = el("div", "songsheet__actions songsheet__actions--start");
-      fr.appendChild(fetchButton());
+      if (state.confirmRemove) {
+        const confirmWrap = el("div", "songsheet__confirm");
+        confirmWrap.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
+        const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
+        yes.type = "button";
+        yes.addEventListener("click", () => {
+          deleteSheet(state.inst, state.song.id);
+          state.record = null;
+          state.confirmRemove = false;
+          state.adding = false;
+          render();
+        });
+        const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
+        no.type = "button";
+        no.addEventListener("click", () => {
+          state.confirmRemove = false;
+          render();
+        });
+        confirmWrap.appendChild(yes);
+        confirmWrap.appendChild(no);
+        fr.appendChild(confirmWrap);
+      } else {
+        if (hasTitle) fr.appendChild(fetchButton());
+        if (state.record) {
+          const remove = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
+          remove.type = "button";
+          remove.addEventListener("click", () => {
+            state.confirmRemove = true;
+            render();
+          });
+          fr.appendChild(remove);
+        }
+      }
       form.appendChild(fr);
     }
 
@@ -1208,6 +1370,7 @@
     cancel.type = "button";
     cancel.addEventListener("click", () => {
       state.adding = false;
+      state.confirmRemove = false;
       render();
     });
     const save = el("button", "songsheet__btn songsheet__btn--primary", "Save");
@@ -1249,76 +1412,41 @@
     const shown = transposeModel(model, semis);
 
     /* ---- toolbar: two rows so it doesn't feel like a wall of buttons --
-       the primary row (Remove, Edit -- the two actions on the sheet itself)
-       stays put; transpose and sync are secondary, so they sit in a quieter
-       row underneath. Sync mode replaces all of that with just the two
-       buttons relevant to placing timestamps -- Edit/Remove/transpose would
-       only get in the way while tapping lines. ---- */
+       the primary row (just Edit -- Remove now lives inside the editor
+       itself, see renderEditor) stays put; play along and sync are
+       secondary, so they sit in a quieter row underneath. Transpose moved
+       out of here entirely -- it's rendered below the chord overview
+       further down. Sync mode replaces all of that with just the two
+       buttons relevant to placing timestamps -- Edit/play-along would only
+       get in the way while tapping lines. ---- */
     const bar = el("div", "songsheet__bar");
 
     if (!state.syncMode) {
       const primaryRow = el("div", "songsheet__bar-row");
-      if (state.confirmRemove) {
-        // Inline confirm instead of window.confirm() -- confirm() dialogs are
-        // suppressed in some embedded/preview browser contexts (silently
-        // returning false, so the button looked broken), and a two-tap inline
-        // control is nicer on a phone anyway.
-        const confirmWrap = el("div", "songsheet__confirm");
-        confirmWrap.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
-        const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
-        yes.type = "button";
-        yes.addEventListener("click", () => {
-          deleteSheet(state.inst, state.song.id);
-          state.record = null;
-          state.confirmRemove = false;
-          render();
-        });
-        const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
-        no.type = "button";
-        no.addEventListener("click", () => {
-          state.confirmRemove = false;
-          render();
-        });
-        confirmWrap.appendChild(yes);
-        confirmWrap.appendChild(no);
-        primaryRow.appendChild(confirmWrap);
-      } else {
-        const remove = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
-        remove.type = "button";
-        remove.addEventListener("click", () => {
-          state.confirmRemove = true;
-          render();
-        });
-        primaryRow.appendChild(remove);
-
-        const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
-        edit.type = "button";
-        edit.addEventListener("click", () => {
-          state.adding = true;
-          render();
-        });
-        primaryRow.appendChild(edit);
-      }
+      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
+      edit.type = "button";
+      edit.disabled = state.playAlong.on;
+      edit.addEventListener("click", () => {
+        state.adding = true;
+        render();
+      });
+      primaryRow.appendChild(edit);
       bar.appendChild(primaryRow);
     }
 
     const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
 
     if (!state.syncMode) {
-      const tp = el("div", "songsheet__transpose");
-      const minus = el("button", "songsheet__step", "−");
-      minus.type = "button";
-      minus.setAttribute("aria-label", "Transpose down");
-      const plus = el("button", "songsheet__step", "+");
-      plus.type = "button";
-      plus.setAttribute("aria-label", "Transpose up");
-      const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
-      minus.addEventListener("click", () => bumpTranspose(-1));
-      plus.addEventListener("click", () => bumpTranspose(1));
-      tp.appendChild(minus);
-      tp.appendChild(amount);
-      tp.appendChild(plus);
-      secondaryRow.appendChild(tp);
+      const chordSymsForPlayAlong = uniqueChords(shown);
+      const playBtn = el(
+        "button",
+        "songsheet__btn" + (state.playAlong.on ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
+        state.playAlong.on ? "Stop play along" : "Play along"
+      );
+      playBtn.type = "button";
+      playBtn.disabled = !chordSymsForPlayAlong.length;
+      playBtn.addEventListener("click", () => togglePlayAlong());
+      secondaryRow.appendChild(playBtn);
     }
 
     // Only shown in sync mode, and only once there's something to clear --
@@ -1372,10 +1500,15 @@
       state.confirmClearSync = false;
       // Tapping lines to place timestamps while the view is also scrolling
       // out from under you doesn't work -- turn autoscroll off going in.
-      if (state.syncMode && state.autoscroll.on) {
-        state.autoscroll.on = false;
-        state.autoscroll.menuOpen = false;
-        stopAutoscroll();
+      // Play along repurposes the same tap for its own jump-to override, so
+      // it has to give way too.
+      if (state.syncMode) {
+        if (state.autoscroll.on) {
+          state.autoscroll.on = false;
+          state.autoscroll.menuOpen = false;
+          stopAutoscroll();
+        }
+        stopPlayAlong();
       }
       render();
     });
@@ -1472,6 +1605,27 @@
       panel.appendChild(card);
     }
 
+    // Transpose sits right under the chord overview it affects, out of the
+    // toolbar entirely -- hidden in sync/play-along mode same as before.
+    if (!state.syncMode && !state.playAlong.on) {
+      const tpRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
+      const tp = el("div", "songsheet__transpose");
+      const minus = el("button", "songsheet__step", "−");
+      minus.type = "button";
+      minus.setAttribute("aria-label", "Transpose down");
+      const plus = el("button", "songsheet__step", "+");
+      plus.type = "button";
+      plus.setAttribute("aria-label", "Transpose up");
+      const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
+      minus.addEventListener("click", () => bumpTranspose(-1));
+      plus.addEventListener("click", () => bumpTranspose(1));
+      tp.appendChild(minus);
+      tp.appendChild(amount);
+      tp.appendChild(plus);
+      tpRow.appendChild(tp);
+      panel.appendChild(tpRow);
+    }
+
     if (state.syncMode) {
       const activeForHint = getActivePlayback();
       panel.appendChild(
@@ -1485,12 +1639,33 @@
       );
     }
 
+    if (state.playAlong.on) {
+      panel.appendChild(
+        el(
+          "p",
+          "songsheet__sub",
+          "Listening — play the highlighted chord to move on. Tap a line to jump there yourself."
+        )
+      );
+    }
+    if (state.playAlong.error) {
+      panel.appendChild(el("p", "songsheet__status songsheet__status--error", state.playAlong.error));
+    }
+
     /* ---- the sheet body ---- */
     const body = el("div", "songsheet__body");
     lineWeights = [];
     let flatLineIdx = 0;
     const activePlayback = state.syncMode ? getActivePlayback() : null;
     const activeSyncArr = activePlayback ? (state.song.lyricsSync && state.song.lyricsSync[activePlayback.key]) || [] : null;
+    // The set of "lineIdx:order" chord occurrences belonging to whichever
+    // step play-along is currently on -- see buildChordSteps() and the
+    // stepKey lookup in renderLine().
+    let playAlongKeys = null;
+    if (state.playAlong.on && state.playAlong.steps) {
+      const step = state.playAlong.steps[state.playAlong.index];
+      if (step) playAlongKeys = new Set(step.occurrences.map((o) => o.lineIdx + ":" + o.order));
+    }
     shown.sections.forEach((section) => {
       const sec = el("div", "ss-section");
       if (section.label) sec.appendChild(el("div", "ss-section__label", section.label));
@@ -1501,8 +1676,15 @@
         }
         const idx = flatLineIdx++;
         lineWeights[idx] = Math.max(1, (line.lyric || "").trim().length);
-        const lineEl = renderLine(line, state.syncMode);
+        const lineEl = renderLine(line, state.syncMode, idx, playAlongKeys);
         lineEl.dataset.lineIdx = String(idx);
+        if (state.playAlong.on) {
+          lineEl.classList.add("ss-line--syncable");
+          lineEl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            jumpPlayAlongTo(idx);
+          });
+        }
         if (state.syncMode) {
           lineEl.classList.add("ss-line--syncmode");
           const existing = activeSyncArr && activeSyncArr.find((p) => p.line === idx);
@@ -1649,11 +1831,15 @@
   // the spacing; the pieces are inline and wrap as whole units. In sync
   // mode `disableChordTap` drops the chord's own tap handling so a tap
   // anywhere on the line -- chord included -- reaches the line's own click
-  // handler (addSyncPoint) instead of opening the chord diagram.
-  function renderLine(line, disableChordTap) {
+  // handler (addSyncPoint) instead of opening the chord diagram. `lineIdx`
+  // + `playAlongKeys` (a Set of "lineIdx:order" strings, or null when play
+  // along isn't on) are only used to mark whichever chord occurrence is
+  // the currently-live play-along step -- see buildChordSteps().
+  function renderLine(line, disableChordTap, lineIdx, playAlongKeys) {
     const wrap = el("div", "ss-line");
     const chords = line.chords.slice().sort((a, b) => a.index - b.index);
     const lyric = line.lyric || "";
+    let realOrder = 0;
 
     if (!chords.length) {
       const seg = el("span", "ss-seg");
@@ -1687,7 +1873,14 @@
       }
       // Real chord symbols only -- bar lines / "N.C." / repeat marks stay
       // plain text, same filter as the chip row's uniqueChords().
-      if (!disableChordTap && /^[A-G]/.test(ch.sym.trim())) {
+      const isRealChord = /^[A-G]/.test(ch.sym.trim());
+      if (isRealChord) {
+        if (playAlongKeys && playAlongKeys.has(lineIdx + ":" + realOrder)) {
+          chordEl.classList.add("ss-seg__chord--playalong");
+        }
+        realOrder += 1;
+      }
+      if (!disableChordTap && isRealChord) {
         chordEl.classList.add("ss-seg__chord--tap");
         chordEl.addEventListener("click", (e) => {
           e.stopPropagation();
