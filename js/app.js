@@ -68,6 +68,24 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !wakeLock) requestWakeLock();
   });
+  // The very first requestWakeLock() above runs before any user gesture --
+  // some browsers silently refuse a wake lock request that isn't triggered
+  // by user activation, and the try/catch above swallows that refusal same
+  // as any other, so the page could be sitting with no lock at all and no
+  // visibilitychange due to fire and reveal it. Retry once on the user's
+  // first tap/key anywhere, and again periodically as a catch-all for the
+  // lock being silently dropped by the OS without a visibilitychange event
+  // (e.g. the display merely dimming rather than the tab backgrounding).
+  const firstGestureRetry = () => {
+    document.removeEventListener("pointerdown", firstGestureRetry);
+    document.removeEventListener("keydown", firstGestureRetry);
+    if (!wakeLock) requestWakeLock();
+  };
+  document.addEventListener("pointerdown", firstGestureRetry);
+  document.addEventListener("keydown", firstGestureRetry);
+  setInterval(() => {
+    if (!wakeLock) requestWakeLock();
+  }, 20000);
 
   /* ---------- Navigation ---------- */
   const navButtons = document.querySelectorAll(".nav-btn");
@@ -194,7 +212,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "30";
+  const BUILD = "31";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 

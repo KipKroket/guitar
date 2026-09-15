@@ -202,10 +202,10 @@
           player.addListener("initialization_error", ({ message }) => reject(new Error(message)));
           player.addListener("authentication_error", () => {
             clearAuth();
-            reject(new Error("Je Spotify-sessie is verlopen -- log opnieuw in."));
+            reject(new Error("Your Spotify session has expired -- log in again."));
           });
           player.addListener("account_error", () =>
-            reject(new Error("Dit werkt alleen met Spotify Premium."))
+            reject(new Error("This only works with Spotify Premium."))
           );
           player.connect();
         })
@@ -238,14 +238,14 @@
     if (!token) throw new Error("not-logged-in");
     await ensurePlayer();
     const trackId = await resolveTrackId(song);
-    if (!trackId) throw new Error("Kon dit nummer niet vinden op Spotify.");
+    if (!trackId) throw new Error("Couldn't find this song on Spotify.");
     currentTrackId = trackId;
     const res = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
       method: "PUT",
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ uris: ["spotify:track:" + trackId] }),
     });
-    if (!res.ok && res.status !== 204) throw new Error("Afspelen is niet gelukt.");
+    if (!res.ok && res.status !== 204) throw new Error("Playback failed.");
   }
 
   function pause() {
@@ -297,8 +297,8 @@
   // playback controls never live in a card floating over the lyrics.
   function buildLoginPanel(song) {
     const panel = el("div", "audio-dock__panel");
-    panel.appendChild(el("p", "audio-dock__hint", "Log in met je eigen Spotify-account om dit nummer hier af te spelen."));
-    const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Inloggen met Spotify");
+    panel.appendChild(el("p", "audio-dock__hint", "Log in with your own Spotify account to play this song here."));
+    const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Log in with Spotify");
     loginBtn.type = "button";
     loginBtn.addEventListener("click", () => login());
     panel.appendChild(loginBtn);
@@ -330,7 +330,7 @@
     art.src = song.artworkUrl || "";
     bar.appendChild(art);
 
-    const status = el("p", "audio-dock__bar-status", "Verbinden…");
+    const status = el("p", "audio-dock__bar-status", "Connecting…");
     bar.appendChild(status);
 
     const playPause = el("button", "audio-dock__playpause", "");
@@ -354,7 +354,7 @@
 
     const close = el("button", "audio-dock__bar-close", "");
     close.type = "button";
-    close.setAttribute("aria-label", "Stoppen");
+    close.setAttribute("aria-label", "Stop");
     close.innerHTML =
       '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
     close.addEventListener("click", () => window.GuitarAudioDock.hideNowPlaying());
@@ -428,9 +428,9 @@
         window.GuitarAudioDock.hideNowPlaying();
         const msg =
           (err && err.message === "not-logged-in"
-            ? "Log opnieuw in."
-            : (err && err.message) || "Afspelen is niet gelukt.") +
-          " Je kunt het nummer ook in de echte app openen.";
+            ? "Log in again."
+            : (err && err.message) || "Playback failed.") +
+          " You can also open the song in the actual app.";
         window.GuitarAudioDock.togglePanel(
           "spotify",
           () => {
@@ -438,7 +438,7 @@
             const p = el("p", "audio-dock__status audio-dock__status--error", msg);
             panel.appendChild(p);
             if (!isLoggedIn()) {
-              const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Opnieuw inloggen");
+              const loginBtn = el("button", "songsheet__btn songsheet__btn--primary", "Log in again");
               loginBtn.type = "button";
               loginBtn.addEventListener("click", () => login());
               panel.appendChild(loginBtn);

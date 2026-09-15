@@ -93,7 +93,7 @@
   // swap in a different one.
   function buildLinkForm(song) {
     const wrap = el("div", "audio-dock__panel");
-    wrap.appendChild(el("p", "audio-dock__hint", "Plak een YouTube-link naar de backing track."));
+    wrap.appendChild(el("p", "audio-dock__hint", "Paste a YouTube link to the backing track."));
     const input = el("input", "custom-song__input");
     input.type = "url";
     input.value = song.backingTrackUrl || "";
@@ -102,13 +102,13 @@
     const error = el("p", "audio-dock__status audio-dock__status--error", "");
     error.hidden = true;
     wrap.appendChild(error);
-    const save = el("button", "songsheet__btn songsheet__btn--primary", "Opslaan");
+    const save = el("button", "songsheet__btn songsheet__btn--primary", "Save");
     save.type = "button";
     save.addEventListener("click", () => {
       const url = input.value.trim();
       const id = extractVideoId(url);
       if (!id) {
-        error.textContent = "Geen geldige YouTube-link.";
+        error.textContent = "Not a valid YouTube link.";
         error.hidden = false;
         return;
       }
@@ -134,7 +134,7 @@
     const mount = el("div", "audio-dock__bar-video");
     bar.appendChild(mount);
 
-    const status = el("p", "audio-dock__bar-status", "Laden…");
+    const status = el("p", "audio-dock__bar-status", "Loading…");
     bar.appendChild(status);
 
     const playPause = el("button", "audio-dock__playpause", "");
@@ -157,7 +157,7 @@
 
     const editBtn = el("button", "audio-dock__bar-edit", "");
     editBtn.type = "button";
-    editBtn.setAttribute("aria-label", "Andere link");
+    editBtn.setAttribute("aria-label", "Change link");
     editBtn.innerHTML =
       '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
     editBtn.addEventListener("click", () => {
@@ -169,7 +169,7 @@
 
     const close = el("button", "audio-dock__bar-close", "");
     close.type = "button";
-    close.setAttribute("aria-label", "Stoppen");
+    close.setAttribute("aria-label", "Stop");
     close.innerHTML =
       '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
     close.addEventListener("click", () => window.GuitarAudioDock.hideNowPlaying());
@@ -177,7 +177,7 @@
 
     const videoId = extractVideoId(song.backingTrackUrl);
     if (!videoId) {
-      status.textContent = "Deze link ziet er niet meer geldig uit.";
+      status.textContent = "This link doesn't look valid anymore.";
       status.classList.add("audio-dock__bar-status--error");
       return bar;
     }
@@ -243,7 +243,7 @@
             stopProgressTimer();
             status.hidden = false;
             status.classList.add("audio-dock__bar-status--error");
-            status.textContent = "Deze video kan niet worden afgespeeld.";
+            status.textContent = "This video can't be played.";
             playPause.hidden = true;
             progress.hidden = true;
             time.hidden = true;

@@ -297,18 +297,12 @@
     const rec = readStore(inst)[songId];
     return rec && typeof rec.raw === "string" ? rec : null;
   }
-  // `sync` (lyric-sync timestamps, see the autoscroll section below) is
-  // opt-in per call, not auto-preserved: a caller that changes the raw text
-  // (paste/fetch) omits it and the old line-indexed points are dropped along
-  // with the text they pointed into, while bumpTranspose and the sync
-  // editing itself pass the existing map straight through unchanged.
   function saveSheet(inst, songId, rec) {
     const store = readStore(inst);
     store[songId] = {
       raw: rec.raw,
       source: rec.source || "paste",
       transpose: rec.transpose | 0,
-      sync: rec.sync && typeof rec.sync === "object" ? rec.sync : {},
       savedAt: Date.now(),
     };
     writeStore(inst, store);
@@ -384,8 +378,17 @@
     scrollLastTs = null;
     scrollPos = null;
     scrollWritten = null;
+    if (panel) panel.style.transform = "";
   }
 
+  // scrollTop can only ever land on a whole pixel, so at a slow tempo (a
+  // handful of px/s) it visibly steps once every several frames instead of
+  // gliding -- a `translateY` has no such floor. The panel carries the
+  // sub-pixel remainder between whole-pixel scrollTop writes (always well
+  // under 1px -- writeScroll fires the moment rounding would cross to the
+  // next pixel, so the gap it's covering for never grows past half a pixel
+  // either side), so motion looks like a smooth 60fps glide on top of
+  // scrollTop's coarser but still fully real, drag-compatible position.
   function writeScroll(box, targetY) {
     const rounded = Math.round(targetY);
     if (rounded !== scrollWritten) {
@@ -393,6 +396,7 @@
       else box.scrollTop = rounded;
       scrollWritten = rounded;
     }
+    if (panel) panel.style.transform = "translateY(" + (scrollWritten - targetY) + "px)";
   }
 
   function tickManual(box, ts) {
@@ -541,11 +545,29 @@
 
   /* ---- Lyric sync -- ties lyric lines to a Spotify/YouTube position ----
      Sync points are `{ line, ms }`, kept sorted by ms, stored per source
-     recording (see getSourceKey() in js/spotify.js / js/backingtrack.js) on
-     the sheet record itself -- a different recording of the same song has
-     different timing, and the points are only meaningful alongside the
-     exact line indices of the sheet text they were tapped against (see the
-     saveSheet() comment on why editing the raw text drops them). ---- */
+     recording (see getSourceKey() in js/spotify.js / js/backingtrack.js) as
+     `song.lyricsSync` -- on the song object itself (via GuitarLibrary.setSongField,
+     same as spotifyTrackId/backingTrackUrl), NOT inside the sheet record.
+     That's deliberate: the sheet record lives in its own untracked storage
+     key that never reaches cloud sync or export (the raw chord/lyric text is
+     usually copyrighted), but a timestamp map has no copyrighted content of
+     its own and the user explicitly wants it backed up alongside the
+     YouTube link it's keyed against -- setSongField already rides along with
+     sync/export for exactly this kind of small per-song metadata.
+     Caveat worth knowing: the line indices only mean anything next to the
+     exact sheet text they were tapped against, and that text does NOT sync
+     -- restoring on a new device (or after re-pasting a differently-worded
+     sheet) needs the identical line-for-line text before the timestamps line
+     up again. Editing/replacing the raw text clears lyricsSync for exactly
+     this reason (see clearLyricsSync()); transpose doesn't touch it. ---- */
+
+  function clearLyricsSync() {
+    if (!state || !state.song) return;
+    state.song.lyricsSync = {};
+    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
+      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: {} });
+    }
+  }
 
   function getActivePlayback() {
     if (
@@ -571,23 +593,23 @@
     return null;
   }
 
-  // Whether the FAB should offer the "vast tempo" override at all -- i.e.
+  // Whether the FAB should offer the "fixed tempo" override at all -- i.e.
   // whether synced autoscroll is even possible right now, regardless of
   // whether the override is currently forcing manual mode.
   function hasSyncAvailable() {
     const active = getActivePlayback();
-    if (!active || !state || !state.record) return false;
-    return ((state.record.sync && state.record.sync[active.key]) || []).length >= 2;
+    if (!active || !state || !state.song) return false;
+    return ((state.song.lyricsSync && state.song.lyricsSync[active.key]) || []).length >= 2;
   }
 
   // What autoscroll should actually do this frame: null falls back to the
   // fixed-speed manual tick. Needs at least two points to interpolate
   // between; the override toggle (forceManual) always wins.
   function effectiveSyncedMode() {
-    if (!state || !state.record || state.autoscroll.forceManual) return null;
+    if (!state || !state.song || state.autoscroll.forceManual) return null;
     const active = getActivePlayback();
     if (!active) return null;
-    const points = (state.record.sync && state.record.sync[active.key]) || [];
+    const points = (state.song.lyricsSync && state.song.lyricsSync[active.key]) || [];
     if (points.length < 2) return null;
     return { key: active.key, points, posMs: active.ms };
   }
@@ -598,14 +620,11 @@
   }
 
   function saveSyncPoints(sync) {
-    if (!state || !state.record) return;
-    saveSheet(state.inst, state.song.id, {
-      raw: state.record.raw,
-      source: state.record.source,
-      transpose: state.record.transpose,
-      sync,
-    });
-    state.record = loadSheet(state.inst, state.song.id);
+    if (!state || !state.song) return;
+    state.song.lyricsSync = sync;
+    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
+      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: sync });
+    }
   }
 
   function cloneSync(sync) {
@@ -619,8 +638,8 @@
   // a point and correct one you notice has drifted while playing along.
   function addSyncPoint(lineIdx) {
     const active = getActivePlayback();
-    if (!active || !state.record) return;
-    const sync = cloneSync(state.record.sync);
+    if (!active || !state.song) return;
+    const sync = cloneSync(state.song.lyricsSync);
     const arr = (sync[active.key] || []).filter((p) => p.line !== lineIdx);
     arr.push({ line: lineIdx, ms: Math.round(active.ms) });
     arr.sort((a, b) => a.ms - b.ms);
@@ -630,9 +649,21 @@
   }
 
   function removeSyncPoint(lineIdx, key) {
-    if (!state.record) return;
-    const sync = cloneSync(state.record.sync);
+    if (!state.song) return;
+    const sync = cloneSync(state.song.lyricsSync);
     sync[key] = (sync[key] || []).filter((p) => p.line !== lineIdx);
+    saveSyncPoints(sync);
+    render();
+  }
+
+  // Single "clear all" for sync mode -- removing points one at a time by
+  // tapping each time-badge is tedious once there are more than a couple.
+  // Only clears the currently-playing source's points, not every source
+  // this sheet has ever been tagged against.
+  function clearAllSyncPoints(key) {
+    if (!state.song) return;
+    const sync = cloneSync(state.song.lyricsSync);
+    delete sync[key];
     saveSyncPoints(sync);
     render();
   }
@@ -760,7 +791,7 @@
       // (a bad sync, or wanting to drill slower/faster than the recording).
       if (hasSyncAvailable()) {
         const modeRow = el("label", "songsheet__scroll-row");
-        modeRow.appendChild(el("span", null, "Vast tempo"));
+        modeRow.appendChild(el("span", null, "Fixed tempo"));
         const modeToggle = el("input", "songsheet__scroll-toggle");
         modeToggle.type = "checkbox";
         modeToggle.checked = !!state.autoscroll.forceManual;
@@ -773,7 +804,7 @@
       }
 
       if (effectiveSyncedMode()) {
-        menu.appendChild(el("p", "songsheet__scroll-status", "Gesynchroniseerd met afspelen"));
+        menu.appendChild(el("p", "songsheet__scroll-status", "Synced with playback"));
       } else {
         const speedWrap = el("label", "songsheet__scroll-speed");
         const speedHead = el("div", "songsheet__scroll-speed-head");
@@ -830,6 +861,7 @@
       fetchError: null,
       confirmRemove: false,
       syncMode: false,
+      confirmClearSync: false,
       autoscroll: { on: false, speed: loadScrollSpeed(), fabMenuOpen: false, forceManual: false },
     };
     root.hidden = false;
@@ -1019,6 +1051,7 @@
       transpose: (state.record && state.record.transpose) | 0,
     });
     state.record = loadSheet(state.inst, songId);
+    clearLyricsSync(); // new text -- old line-indexed timestamps no longer line up
     state.adding = false;
     state.fetchError = null;
     render();
@@ -1074,6 +1107,7 @@
         transpose: (state.record && state.record.transpose) | 0,
       });
       state.record = loadSheet(state.inst, state.song.id);
+      clearLyricsSync(); // new text -- old line-indexed timestamps no longer line up
       state.adding = false;
       render();
     });
@@ -1090,38 +1124,12 @@
     const shown = transposeModel(model, semis);
 
     /* ---- toolbar: two rows so it doesn't feel like a wall of buttons --
-       the primary row (autoscroll, edit) stays put; transpose and remove
-       are secondary, so they sit in a quieter row underneath. ---- */
+       the primary row (Edit, Remove -- the two actions on the sheet itself)
+       stays put; transpose and sync are secondary, so they sit in a quieter
+       row underneath. ---- */
     const bar = el("div", "songsheet__bar");
 
     const primaryRow = el("div", "songsheet__bar-row");
-    if (!state.confirmRemove) {
-      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
-      edit.type = "button";
-      edit.addEventListener("click", () => {
-        state.adding = true;
-        render();
-      });
-      primaryRow.appendChild(edit);
-    }
-    bar.appendChild(primaryRow);
-
-    const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
-    const tp = el("div", "songsheet__transpose");
-    const minus = el("button", "songsheet__step", "−");
-    minus.type = "button";
-    minus.setAttribute("aria-label", "Transpose down");
-    const plus = el("button", "songsheet__step", "+");
-    plus.type = "button";
-    plus.setAttribute("aria-label", "Transpose up");
-    const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
-    minus.addEventListener("click", () => bumpTranspose(-1));
-    plus.addEventListener("click", () => bumpTranspose(1));
-    tp.appendChild(minus);
-    tp.appendChild(amount);
-    tp.appendChild(plus);
-    secondaryRow.appendChild(tp);
-
     if (state.confirmRemove) {
       // Inline confirm instead of window.confirm() -- confirm() dialogs are
       // suppressed in some embedded/preview browser contexts (silently
@@ -1145,24 +1153,51 @@
       });
       confirmWrap.appendChild(yes);
       confirmWrap.appendChild(no);
-      secondaryRow.appendChild(confirmWrap);
+      primaryRow.appendChild(confirmWrap);
     } else {
-      const clear = el("button", "songsheet__btn songsheet__btn--sm", "Remove");
-      clear.type = "button";
-      clear.addEventListener("click", () => {
+      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
+      edit.type = "button";
+      edit.addEventListener("click", () => {
+        state.adding = true;
+        render();
+      });
+      primaryRow.appendChild(edit);
+
+      const remove = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
+      remove.type = "button";
+      remove.addEventListener("click", () => {
         state.confirmRemove = true;
         render();
       });
-      secondaryRow.appendChild(clear);
+      primaryRow.appendChild(remove);
     }
+    bar.appendChild(primaryRow);
+
+    const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
+    const tp = el("div", "songsheet__transpose");
+    const minus = el("button", "songsheet__step", "−");
+    minus.type = "button";
+    minus.setAttribute("aria-label", "Transpose down");
+    const plus = el("button", "songsheet__step", "+");
+    plus.type = "button";
+    plus.setAttribute("aria-label", "Transpose up");
+    const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
+    minus.addEventListener("click", () => bumpTranspose(-1));
+    plus.addEventListener("click", () => bumpTranspose(1));
+    tp.appendChild(minus);
+    tp.appendChild(amount);
+    tp.appendChild(plus);
+    secondaryRow.appendChild(tp);
+
     const syncBtn = el(
       "button",
       "songsheet__btn songsheet__btn--sm" + (state.syncMode ? " is-active" : ""),
-      state.syncMode ? "Klaar met syncen" : "Sync"
+      state.syncMode ? "Done syncing" : "Sync"
     );
     syncBtn.type = "button";
     syncBtn.addEventListener("click", () => {
       state.syncMode = !state.syncMode;
+      state.confirmClearSync = false;
       // Tapping lines to place timestamps while the view is also scrolling
       // out from under you doesn't work -- turn autoscroll off going in.
       if (state.syncMode && state.autoscroll.on) {
@@ -1172,6 +1207,45 @@
       render();
     });
     secondaryRow.appendChild(syncBtn);
+
+    // Only shown in sync mode, and only once there's something to clear --
+    // removing points one at a time by tapping each time-badge is tedious
+    // once there are more than a couple.
+    const activePlaybackForClear = state.syncMode ? getActivePlayback() : null;
+    const clearableCount = activePlaybackForClear
+      ? ((state.song.lyricsSync && state.song.lyricsSync[activePlaybackForClear.key]) || []).length
+      : 0;
+    if (state.syncMode && clearableCount > 0) {
+      if (state.confirmClearSync) {
+        const confirmWrap = el("div", "songsheet__confirm");
+        confirmWrap.appendChild(
+          el("span", "songsheet__confirm-label", "Clear all " + clearableCount + " timestamps?")
+        );
+        const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear");
+        yes.type = "button";
+        yes.addEventListener("click", () => {
+          clearAllSyncPoints(activePlaybackForClear.key);
+          state.confirmClearSync = false;
+        });
+        const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
+        no.type = "button";
+        no.addEventListener("click", () => {
+          state.confirmClearSync = false;
+          render();
+        });
+        confirmWrap.appendChild(yes);
+        confirmWrap.appendChild(no);
+        secondaryRow.appendChild(confirmWrap);
+      } else {
+        const clearSync = el("button", "songsheet__btn songsheet__btn--sm", "Clear timestamps");
+        clearSync.type = "button";
+        clearSync.addEventListener("click", () => {
+          state.confirmClearSync = true;
+          render();
+        });
+        secondaryRow.appendChild(clearSync);
+      }
+    }
     bar.appendChild(secondaryRow);
     panel.appendChild(bar);
 
@@ -1218,8 +1292,8 @@
           "p",
           "songsheet__sub",
           activeForHint
-            ? "Tik op de regel die nu klinkt om 'm te koppelen aan dit moment in het nummer. Tik op een tijd-label om die timestamp te verwijderen."
-            : "Start Spotify of een YouTube-backingtrack hierboven om timestamps te kunnen zetten."
+            ? "Tap the line playing right now to link it to this moment in the song. Tap a time label to remove that timestamp."
+            : "Start Spotify or a YouTube backing track above to be able to set timestamps."
         )
       );
     }
@@ -1229,7 +1303,7 @@
     lineWeights = [];
     let flatLineIdx = 0;
     const activePlayback = state.syncMode ? getActivePlayback() : null;
-    const activeSyncArr = activePlayback ? (state.record.sync && state.record.sync[activePlayback.key]) || [] : null;
+    const activeSyncArr = activePlayback ? (state.song.lyricsSync && state.song.lyricsSync[activePlayback.key]) || [] : null;
     shown.sections.forEach((section) => {
       const sec = el("div", "ss-section");
       if (section.label) sec.appendChild(el("div", "ss-section__label", section.label));
@@ -1436,7 +1510,6 @@
       raw: state.record.raw,
       source: state.record.source,
       transpose: next,
-      sync: state.record.sync,
     });
     state.record = loadSheet(state.inst, state.song.id);
     render();
