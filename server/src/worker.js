@@ -5,7 +5,8 @@
 //   /login     { username, passcode }        -> { token }        401 / 429
 //   /sync      { token, libraries }          -> { libraries }     401
 //   /logout    { token }                     -> { ok: true }
-//   /song      { artist, title } | { url }   -> { raw, meta, source, url }   404 / 429 / 502
+//   /song      { artist, title }             -> { candidates: [...] }   429 / 502
+//              { url }                       -> { raw, meta, source, url }   429 / 502
 //
 // "libraries" is { guitar: {songs,tombstones}, piano: {songs,tombstones} }.
 // The server keeps its own copy and returns the MERGE of what it had and
@@ -13,12 +14,15 @@
 // is a straight port of mergeSnapshots() in app/js/library.js — keep them
 // in step.
 //
-// /song scrapes a chord sheet from an external site (Ultimate Guitar first,
-// then Cifra Club), converts it to the plain "chords above the lyrics" text
-// that app/js/songsheet.js parses, caches it in D1 (table `sheets`), and
-// returns it. `refresh: true` re-fetches past the cache. It's an open
-// endpoint, lightly rate-limited per IP; if it ever gets abused, gate it
-// behind userForToken() the way /sync is.
+// /song by { artist, title } searches Ultimate Guitar and Cifra Club, fetches
+// the top couple of matches from EACH (so a wrong top pick doesn't silently
+// win), and returns them all as `candidates` for the client to preview and
+// pick from -- it never guesses on the user's behalf. /song by { url } fetches
+// that one exact page and returns it directly (unambiguous, no picker
+// needed): the recovery path when search finds nothing or the wrong version.
+// Both cache in D1 (table `sheets`); `refresh: true` re-fetches past the
+// cache. It's an open endpoint, lightly rate-limited per IP; if it ever gets
+// abused, gate it behind userForToken() the way /sync is.
 
 const INSTRUMENTS = ["guitar", "piano"];
 const TOMB_TTL_MS = 150 * 24 * 60 * 60 * 1000;
@@ -134,6 +138,12 @@ async function logout(env, { token }) {
 
 /* ---------- /song: scrape + cache a chord sheet ---------- */
 
+// Per source, how many of its top-scored search hits to actually fetch and
+// offer as candidates -- and a hard cap across all sources combined, so one
+// click never fans out into an unbounded pile of upstream requests.
+const CANDIDATES_PER_SOURCE = 2;
+const MAX_CANDIDATES = 5;
+
 async function song(env, body, request) {
   const artist = String((body && body.artist) || "").trim();
   const title = String((body && body.title) || "").trim();
@@ -141,10 +151,14 @@ async function song(env, body, request) {
   const refresh = Boolean(body && body.refresh);
   if (!title && !url) return json({ error: "Need a song title or a url." }, 400);
 
-  const key = url
-    ? "url:" + url.toLowerCase()
-    : "q:" + normKey(artist) + "|" + normKey(cleanTitle(title));
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  return url
+    ? await fetchSingleUrl(env, ip, url, refresh)
+    : await fetchCandidates(env, ip, artist, title, refresh);
+}
 
+async function fetchSingleUrl(env, ip, url, refresh) {
+  const key = "url:" + url.toLowerCase();
   if (!refresh) {
     const hit = await env.DB
       .prepare("SELECT source, url, raw, meta FROM sheets WHERE key = ?")
@@ -155,27 +169,13 @@ async function song(env, body, request) {
     }
   }
 
-  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (await songRateLimited(env, ip)) {
     return json({ error: "Too many fetches this hour — wait a bit, or paste the sheet in by hand." }, 429);
   }
 
-  // e-chords dropped from the default chain: both its search API and its
-  // song pages sit behind a Cloudflare JS challenge that a plain fetch() can
-  // never pass (confirmed -- it 403s identically with or without a Worker),
-  // so it never once succeeded here and only added latency. Left reachable
-  // via sourcesForUrl() for a pasted link, in case that ever changes.
-  //
-  // Cifra Club has no such challenge (confirmed working from a Worker, no
-  // UA spoofing even required) and is a large, independent catalog, so it's
-  // a genuine second attempt rather than a duplicate of Ultimate Guitar --
-  // it runs whenever UG comes up empty.
-  const chain = url
-    ? sourcesForUrl(url)
-    : [
-        { name: "ultimate-guitar", run: () => ugSearchAndFetch(artist, title) },
-        { name: "cifraclub", run: () => cifraclubSearchAndFetch(artist, title) },
-      ];
+  // e-chords reachable here (a pasted e-chords link) even though it's
+  // dropped from the search chain below -- see fetchCandidates() for why.
+  const chain = sourcesForUrl(url);
 
   const tried = [];
   let result = null;
@@ -208,6 +208,104 @@ async function song(env, body, request) {
   return json({ raw: result.raw, meta: result.meta || {}, source: result.source, url: result.url || null });
 }
 
+// Artist/title search: rather than silently picking "the best" hit (which is
+// exactly what produces the occasional wrong-song result the picker exists
+// to fix), fetch the top couple of hits from every source and hand back all
+// of them -- already fully converted to sheet text -- so the client can show
+// a preview list and the user picks. Cached as one list per query.
+async function fetchCandidates(env, ip, artist, title, refresh) {
+  const key = "list:" + normKey(artist) + "|" + normKey(cleanTitle(title));
+
+  if (!refresh) {
+    const hit = await env.DB.prepare("SELECT raw FROM sheets WHERE key = ?").bind(key).first();
+    const cached = hit && safeParse(hit.raw);
+    if (Array.isArray(cached) && cached.length) return json({ candidates: cached, cached: true });
+  }
+
+  if (await songRateLimited(env, ip)) {
+    return json({ error: "Too many fetches this hour — wait a bit, or paste the sheet in by hand." }, 429);
+  }
+
+  // e-chords dropped here: both its search API and its song pages sit behind
+  // a Cloudflare JS challenge that a plain fetch() can never pass (confirmed
+  // -- it 403s identically with or without a Worker), so it never once
+  // succeeded and only added latency. Left reachable via sourcesForUrl() for
+  // a pasted link, in case that ever changes.
+  //
+  // Cifra Club has no such challenge (confirmed working from a Worker, no UA
+  // spoofing even required) and is a large, independent catalog, so it's a
+  // genuine second set of candidates rather than a duplicate of Ultimate
+  // Guitar. Both sources are searched and fetched in parallel -- they're
+  // independent, and doing so keeps one click's wall-clock time down even
+  // though it now fetches several pages instead of one.
+  const sources = [
+    {
+      name: "ultimate-guitar",
+      search: () => ugSearch(artist, title),
+      fetch: (h) => ugFromUrl(h.tab_url, { artist, title }),
+      label: (h) => h.tab_url,
+    },
+    {
+      name: "cifraclub",
+      search: () => cifraclubSearch(artist, title),
+      fetch: (h) =>
+        cifraclubFromUrl("https://www.cifraclub.com/" + h.dns + "/" + h.url + "/", {
+          artist: h.art || artist,
+          title: h.txt || title,
+        }),
+      label: (h) => h.dns + "/" + h.url,
+    },
+  ];
+
+  const perSource = await Promise.all(
+    sources.map(async (s) => {
+      const tried = [];
+      const found = [];
+      let hits;
+      try {
+        hits = await s.search();
+      } catch (e) {
+        tried.push(s.name + ": " + String((e && e.message) || e));
+        return { found, tried };
+      }
+      const picked = hits.slice(0, CANDIDATES_PER_SOURCE);
+      const results = await Promise.allSettled(picked.map((h) => s.fetch(h)));
+      results.forEach((res, i) => {
+        const h = picked[i];
+        if (res.status === "fulfilled" && res.value && res.value.raw && res.value.raw.trim()) {
+          found.push({ source: s.name, url: res.value.url, meta: res.value.meta || {}, raw: res.value.raw });
+        } else {
+          const reason = res.status === "rejected" ? String((res.reason && res.reason.message) || res.reason) : "nothing usable";
+          tried.push(s.name + " (" + s.label(h) + "): " + reason);
+        }
+      });
+      return { found, tried };
+    })
+  );
+
+  const tried = [];
+  let candidates = [];
+  perSource.forEach((r) => {
+    candidates = candidates.concat(r.found);
+    tried.push(...r.tried);
+  });
+  candidates = candidates.slice(0, MAX_CANDIDATES);
+
+  await env.DB.prepare("INSERT INTO fetch_attempts (ip, ts) VALUES (?, ?)").bind(ip, Date.now()).run();
+
+  if (!candidates.length) return json({ error: "Couldn't fetch a chord sheet for this song.", tried }, 502);
+
+  await env.DB
+    .prepare(
+      "INSERT INTO sheets (key, source, url, raw, meta, fetched_at) VALUES (?,?,?,?,?,?) " +
+        "ON CONFLICT(key) DO UPDATE SET source=excluded.source, raw=excluded.raw, fetched_at=excluded.fetched_at"
+    )
+    .bind(key, "list", null, JSON.stringify(candidates), "{}", Date.now())
+    .run();
+
+  return json({ candidates });
+}
+
 async function songRateLimited(env, ip) {
   const cutoff = Date.now() - SONG_RATE_WINDOW_MS;
   await env.DB.prepare("DELETE FROM fetch_attempts WHERE ts < ?").bind(cutoff).run();
@@ -234,7 +332,10 @@ function ugPageData(store) {
   );
 }
 
-async function ugSearchAndFetch(artist, title) {
+// Returns UG's chord-tab search hits, best match first -- fetching the
+// actual page content is a separate step (ugFromUrl) so the caller can pull
+// as many or as few of these as it wants.
+async function ugSearch(artist, title) {
   const cleanedTitle = cleanTitle(title);
   const q = [artist, cleanedTitle].filter(Boolean).join(" ");
   const searchUrl =
@@ -264,7 +365,7 @@ async function ugSearchAndFetch(artist, title) {
     if (Math.abs(matchDiff) > 0.15) return matchDiff;
     return b._popularity - a._popularity;
   });
-  return ugFromUrl(hits[0].tab_url, { artist, title });
+  return hits;
 }
 
 // Word-overlap similarity (Dice coefficient) between two normKey()'d
@@ -403,7 +504,9 @@ async function echordsFromUrl(pageUrl, fallback) {
    (found by watching its network traffic; not documented, so it could
    change under us, same risk as scraping the HTML itself). */
 
-async function cifraclubSearchAndFetch(artist, title) {
+// Returns Cifra Club's search hits, best match first -- see ugSearch() above
+// for why fetching is a separate step.
+async function cifraclubSearch(artist, title) {
   const cleanedTitle = cleanTitle(title);
   const q = [artist, cleanedTitle].filter(Boolean).join(" ");
   const res = await fetch("https://solr.sscdn.co/cc/c7/?q=" + encodeURIComponent(q) + "&limit=15", {
@@ -423,12 +526,7 @@ async function cifraclubSearchAndFetch(artist, title) {
     d._artistScore = wantArtist ? tokenOverlap(wantArtist, normKey(d.art || "")) : 1;
   });
   hits.sort((a, b) => (b._titleScore * 2 + b._artistScore) - (a._titleScore * 2 + a._artistScore));
-
-  const pick = hits[0];
-  return cifraclubFromUrl("https://www.cifraclub.com/" + pick.dns + "/" + pick.url + "/", {
-    artist: pick.art || artist,
-    title: pick.txt || title,
-  });
+  return hits;
 }
 
 async function cifraclubFromUrl(pageUrl, fallback) {

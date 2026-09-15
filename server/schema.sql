@@ -27,17 +27,26 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts ON auth_attempts (username, ts);
 
 -- ─────────────────────────────────────────────────────────────────────────
--- Song-sheet cache (POST /song). The Worker scrapes a chord sheet from an
--- external site once, converts it to the plain "chords above the lyrics"
--- text the app's parser understands, and keeps it here so the next open of
--- the same song (on any device) is instant and doesn't hit the source site
--- again. `raw` is that text; `refresh:true` on the request re-fetches.
+-- Song-sheet cache (POST /song). The Worker scrapes chord sheets from
+-- external sites once, converts them to the plain "chords above the lyrics"
+-- text the app's parser understands, and keeps them here so the next open of
+-- the same song (on any device) is instant and doesn't hit the source sites
+-- again. `refresh:true` on the request re-fetches.
+--
+-- Two row shapes share this table, told apart by `key`'s prefix:
+--   "url:<url>"            one page, fetched by exact link -- `raw` is that
+--                           page's sheet text, `source`/`url`/`meta` describe it.
+--   "list:<artist>|<title>" a search by artist/title -- `raw` is a JSON array
+--                           of candidates (`{source,url,meta,raw}` each, one
+--                           per matched page) for the client to preview and
+--                           pick from; `source` is the literal "list" and
+--                           `url`/`meta` are unused.
 CREATE TABLE IF NOT EXISTS sheets (
-  key         TEXT PRIMARY KEY,     -- "q:<artist>|<title>" (normalised) or "url:<url>"
-  source      TEXT NOT NULL,        -- which site it came from ("ultimate-guitar", "e-chords", …)
-  url         TEXT,                 -- the page it was taken from
-  raw         TEXT NOT NULL,        -- chord sheet text, ready for js/songsheet.js
-  meta        TEXT NOT NULL DEFAULT '{}',  -- JSON { title, artist, key, capo }
+  key         TEXT PRIMARY KEY,
+  source      TEXT NOT NULL,        -- which site it came from, or "list"
+  url         TEXT,                 -- the page it was taken from (url: rows only)
+  raw         TEXT NOT NULL,        -- sheet text (url: rows) or JSON candidate array (list: rows)
+  meta        TEXT NOT NULL DEFAULT '{}',  -- JSON { title, artist, key, capo } (url: rows only)
   fetched_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sheets_fetched ON sheets (fetched_at);

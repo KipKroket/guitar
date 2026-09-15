@@ -3,8 +3,11 @@
 //
 // Phase 1 (this file): parse a pasted chord sheet, render it, transpose it,
 // tap a chord to see its diagram. No network at all -- the text is whatever
-// the user pastes in. Phase 2 adds a "fetch automatically" button that fills
-// the same textarea from a proxy; phase 3 adds autoscroll.
+// the user pastes in. Phase 2 adds a "fetch automatically" button: a
+// title/artist search comes back as multiple candidates (one Worker request
+// per site tried, several sites) shown as a scrollable preview list -- the
+// user picks one, nothing is saved automatically -- while a pasted link is
+// unambiguous and fetched straight into the sheet. Phase 3 adds autoscroll.
 //
 // PRIVACY / LICENSING: pasted sheets live under their own localStorage keys
 // (guitar-sheets / piano-sheets), keyed by song id. That store is deliberately
@@ -825,6 +828,7 @@
       expanded: false,
       fetching: false,
       fetchError: null,
+      candidates: null, // search results awaiting a pick, or null
       confirmRemove: false,
       syncMode: false,
       confirmClearSync: false,
@@ -881,7 +885,9 @@
     panel = el("div", "songsheet__panel");
     root.appendChild(panel);
 
-    if (!state.record) {
+    if (state.candidates) {
+      renderCandidatePicker();
+    } else if (!state.record) {
       renderEmpty();
     } else if (state.adding) {
       renderEditor(state.record.raw);
@@ -963,6 +969,76 @@
     }
   }
 
+  function candidateSourceLabel(name) {
+    if (name === "ultimate-guitar") return "Ultimate Guitar";
+    if (name === "cifraclub") return "Cifra Club";
+    if (name === "e-chords") return "e-chords";
+    return name || "";
+  }
+
+  // The first handful of lines worth showing in a candidate card -- skips
+  // the {title:}/{artist:}/{key:} directive header (already shown above the
+  // preview) and any leading blank lines so the little scroll space isn't
+  // wasted repeating what the card head already says.
+  function candidatePreviewLines(raw, n) {
+    const lines = String(raw || "")
+      .split("\n")
+      .filter((ln) => !/^\{[a-z]+:.*\}$/i.test(ln.trim()));
+    while (lines.length && !lines[0].trim()) lines.shift();
+    return lines.slice(0, n).join("\n");
+  }
+
+  // After a title/artist fetch: every candidate the Worker found (already
+  // scraped in full -- see server/src/worker.js's fetchCandidates()), each
+  // with its own short scrollable preview, so a wrong auto-picked match
+  // never silently lands in the sheet -- the user picks the right one, or
+  // bails out to paste instead.
+  function renderCandidatePicker() {
+    const n = state.candidates.length;
+    panel.appendChild(
+      el(
+        "p",
+        "songsheet__sub",
+        "Found " + n + (n === 1 ? " match" : " matches") + " — scroll to compare, then pick one."
+      )
+    );
+
+    const list = el("div", "songsheet__candidates");
+    state.candidates.forEach((cand) => {
+      const meta = cand.meta || {};
+      const card = el("div", "songsheet__candidate");
+
+      const head = el("div", "songsheet__candidate-head");
+      head.appendChild(
+        el("span", "songsheet__candidate-title", meta.title || state.song.title || "Untitled")
+      );
+      if (meta.artist) head.appendChild(el("span", "songsheet__candidate-artist", meta.artist));
+      head.appendChild(el("span", "songsheet__candidate-source", candidateSourceLabel(cand.source)));
+      card.appendChild(head);
+
+      card.appendChild(el("pre", "songsheet__candidate-preview", candidatePreviewLines(cand.raw, 8)));
+
+      const use = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Use this");
+      use.type = "button";
+      use.addEventListener("click", () => pickCandidate(cand));
+      card.appendChild(use);
+
+      list.appendChild(card);
+    });
+    panel.appendChild(list);
+
+    const actions = el("div", "songsheet__actions songsheet__actions--start");
+    const cancel = el("button", "songsheet__btn", "None of these — paste a sheet");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => {
+      state.candidates = null;
+      state.adding = true;
+      render();
+    });
+    actions.appendChild(cancel);
+    panel.appendChild(actions);
+  }
+
   // A single Ultimate Guitar / e-chords (or other) link pasted into the
   // textarea, with nothing else -- fetched through the same Worker instead
   // of being saved as literal text. This is the recovery path when the
@@ -973,6 +1049,11 @@
     return /^https?:\/\/\S+$/.test(t) ? t : null;
   }
 
+  // A pasted url() names one exact page, so it's fetched and saved straight
+  // away -- no ambiguity to preview. A title/artist search can't know which
+  // hit is right, so its result is a list of candidates: parked in
+  // state.candidates for renderCandidatePicker() to show, nothing saved
+  // until the user taps one (applyFetchedSheet/pickCandidate below).
   async function doFetch(url) {
     if (!state || state.fetching) return;
     const songId = state.song.id;
@@ -991,7 +1072,8 @@
         body: JSON.stringify(body),
       });
       data = await res.json().catch(() => null);
-      if (!res.ok || !data || !data.raw) {
+      const ok = url ? !!(data && data.raw) : !!(data && Array.isArray(data.candidates) && data.candidates.length);
+      if (!res.ok || !ok) {
         err = (data && data.error) || "Fetch failed (" + res.status + ").";
       }
     } catch (e) {
@@ -1011,16 +1093,35 @@
       return;
     }
 
+    if (url) {
+      applyFetchedSheet({ raw: data.raw, source: data.source || "fetch" });
+      return;
+    }
+
+    state.candidates = data.candidates;
+    render();
+  }
+
+  // Shared by the url() fetch above and pickCandidate() below -- both end
+  // with the same text ready to save.
+  function applyFetchedSheet(rec) {
+    const songId = state.song.id;
     saveSheet(state.inst, songId, {
-      raw: data.raw,
-      source: data.source || "fetch",
+      raw: rec.raw,
+      source: rec.source || "fetch",
       transpose: (state.record && state.record.transpose) | 0,
     });
     state.record = loadSheet(state.inst, songId);
     clearLyricsSync(); // new text -- old line-indexed timestamps no longer line up
     state.adding = false;
+    state.candidates = null;
     state.fetchError = null;
     render();
+  }
+
+  function pickCandidate(cand) {
+    if (!state || !cand) return;
+    applyFetchedSheet({ raw: cand.raw, source: cand.source || "fetch" });
   }
 
   function renderEditor(initial) {

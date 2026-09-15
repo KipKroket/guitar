@@ -1199,6 +1199,68 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .songsheet__status--error { color: var(--ember); }
 
+/* Candidate picker -- shown after "Fetch automatically" finds more than one
+   possible match. Cards stack vertically (this panel is already inside a
+   narrow, scrollable detail overlay) with their own short scrollable
+   preview so several can be skimmed without leaving the page. */
+.songsheet__candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
+}
+.songsheet__candidate {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.7rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.songsheet__candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.5rem;
+}
+.songsheet__candidate-title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.songsheet__candidate-artist {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.songsheet__candidate-source {
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+}
+.songsheet__candidate-preview {
+  max-height: 7.5rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.songsheet__candidate .songsheet__btn { align-self: flex-start; }
+
 /* Two stacked rows -- primary actions (autoscroll, edit) on top, the
    quieter/rarer ones (transpose, remove) tucked underneath so the toolbar
    doesn't read as a wall of equally-weighted buttons. */
