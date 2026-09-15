@@ -430,9 +430,9 @@ async function jamUpdate(env, body) {
   }
   const pos = body.pos;
   if (pos && typeof pos === "object") {
-    sets.push("pos_fraction = ?", "pos_index = ?");
+    sets.push("pos_line = ?", "pos_index = ?");
     vals.push(
-      Number.isFinite(pos.fraction) ? pos.fraction : null,
+      Number.isFinite(pos.line) ? pos.line : null,
       Number.isFinite(pos.index) ? pos.index : null
     );
   }
@@ -467,7 +467,7 @@ async function jamPoll(env, body) {
     song: { title: row.song_title, artist: row.song_artist, art: row.song_art },
     sheet: { raw: row.sheet_raw, transpose: row.sheet_transpose },
     mode: row.mode,
-    pos: { fraction: row.pos_fraction, index: row.pos_index },
+    pos: { line: row.pos_line, index: row.pos_index },
     participantCount: await jamParticipantCount(env, code),
     updatedAt: row.updated_at,
   });

@@ -81,13 +81,15 @@ CREATE TABLE IF NOT EXISTS jam_sessions (
   sheet_transpose INTEGER NOT NULL DEFAULT 0,
   mode            TEXT NOT NULL DEFAULT 'none', -- 'none' | 'timestamps' | 'autoscroll' | 'playalong'
   -- 'timestamps' and 'autoscroll' both just move the host's own scroll
-  -- position -- rather than replaying the host's sync-point/tempo math
-  -- (which needs the exact same line-wrap layout to land right, and a
-  -- follower's screen width/font size can easily differ), the host simply
-  -- samples its own scrollTop / scrollHeight ratio and broadcasts that.
-  -- Device-independent by construction: "60% down the sheet" means the
-  -- same thing on every screen.
-  pos_fraction    REAL,               -- timestamps/autoscroll modes: 0..1 scroll position
+  -- position -- rather than a raw scrollTop/scrollHeight pixel ratio (which
+  -- would be skewed by however much toolbar/header chrome each screen
+  -- happens to have above the lyrics) or replaying the host's sync-point/
+  -- tempo math (which needs the exact same line-wrap layout to land right,
+  -- and a follower's screen width/font size can easily differ), the host
+  -- reports a fractional *line* index -- e.g. 4.3 means "30% of the way
+  -- from line 4 into line 5" -- the one unit that means the same thing on
+  -- both screens no matter how differently they wrap the same text.
+  pos_line        REAL,               -- timestamps/autoscroll modes: fractional line index (see js/songsheet.js getJamSnapshot)
   pos_index       INTEGER,            -- playalong mode: current chord-step index (see js/songsheet.js buildChordSteps)
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL    -- bumped on every host call; long-stale = treated as ended
