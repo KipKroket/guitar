@@ -175,9 +175,23 @@
     }
   }
 
+  // Waiters for the *next* "ready" event, used when the device has gone
+  // not_ready since ensurePlayer() last resolved (see waitForDevice() and
+  // playSong() below).
+  let deviceWaiters = [];
+
+  // Resolved once by the SDK's own "ready" event and then cached forever --
+  // deliberately, connecting is slow and only needs to happen once. The
+  // trouble is a *rejected* playerPromise used to stay cached just as
+  // permanently: one bad token/init hiccup and every later attempt replayed
+  // that exact same stale error, with no way out short of a full reload
+  // (a fresh page load is a fresh module scope, i.e. a fresh null
+  // playerPromise) -- which is exactly the "close the app and reopen it"
+  // workaround this was causing. Dropping the promise on rejection instead
+  // lets the very next tap start a genuinely new connect attempt.
   function ensurePlayer() {
     if (playerPromise) return playerPromise;
-    playerPromise = loadSdk().then(
+    const attempt = loadSdk().then(
       (Spotify) =>
         new Promise((resolve, reject) => {
           player = new Spotify.Player({
@@ -190,7 +204,17 @@
           player.addListener("ready", ({ device_id }) => {
             deviceId = device_id;
             resolve(player);
+            const waiters = deviceWaiters;
+            deviceWaiters = [];
+            waiters.forEach((w) => w(device_id));
           });
+          // Spotify drops an idle Connect device after a while (and a
+          // backgrounded iOS tab can simply lose the connection outright)
+          // -- noting that here is what lets playSong() below notice
+          // *before* it fires a play request at a device_id that's gone
+          // stale, rather than letting Spotify silently route that request
+          // to whatever device happens to be active instead (see
+          // waitForDevice()).
           player.addListener("not_ready", () => {
             deviceId = null;
           });
@@ -210,7 +234,30 @@
           player.connect();
         })
     );
+    attempt.catch(() => {
+      if (playerPromise === attempt) playerPromise = null;
+    });
+    playerPromise = attempt;
     return playerPromise;
+  }
+
+  function waitForDevice() {
+    if (deviceId) return Promise.resolve(deviceId);
+    if (!player) return Promise.reject(new Error("Spotify isn't connected."));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        deviceWaiters = deviceWaiters.filter((w) => w !== onReady);
+        reject(new Error("Couldn't reconnect to Spotify."));
+      }, 8000);
+      function onReady(id) {
+        clearTimeout(timer);
+        resolve(id);
+      }
+      deviceWaiters.push(onReady);
+      // Nudges the SDK to re-establish its Connect session; a no-op if it's
+      // already (re)connecting on its own.
+      player.connect();
+    });
   }
 
   async function resolveTrackId(song) {
@@ -237,6 +284,14 @@
     const token = await getValidToken();
     if (!token) throw new Error("not-logged-in");
     await ensurePlayer();
+    // The device the SDK registered can have gone stale since (idle
+    // timeout, a backgrounded tab losing its connection, ...) without us
+    // finding out until now. Firing /play at a dead device_id doesn't
+    // reliably error out -- Spotify can instead just resume whatever
+    // *other* device (phone, desktop, ...) happens to be active, with
+    // whatever it already had playing. Reconnecting first is what actually
+    // prevents that "plays a random already-going track" behaviour.
+    if (!deviceId) await waitForDevice();
     const trackId = await resolveTrackId(song);
     if (!trackId) throw new Error("Couldn't find this song on Spotify.");
     currentTrackId = trackId;
@@ -245,7 +300,13 @@
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ uris: ["spotify:track:" + trackId] }),
     });
-    if (!res.ok && res.status !== 204) throw new Error("Playback failed.");
+    if (!res.ok && res.status !== 204) {
+      // A 404 here means Spotify no longer recognises this device_id at
+      // all -- drop it so the *next* attempt reconnects up front instead
+      // of repeating the same failing request against a dead id.
+      if (res.status === 404) deviceId = null;
+      throw new Error("Playback failed.");
+    }
   }
 
   function pause() {
