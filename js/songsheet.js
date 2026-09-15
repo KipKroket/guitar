@@ -676,27 +676,16 @@
      than position:fixed against the viewport, since fixed positioning is
      unreliable in iOS standalone (see the .app height comment in
      style.css) and could drift below the real screen edge, overlapping
-     the bottom nav. Shown whenever the sheet is expanded
-     and has lyrics to scroll through -- it's the only autoscroll control
-     now (the old toolbar toggle+menu is gone), so it has to be reachable
-     to turn autoscroll on in the first place, not just to adjust it once
-     running. Tap opens a small menu with the on/off toggle and tempo. ---- */
+     the bottom nav. Shown whenever the sheet is expanded and has lyrics to
+     scroll through. A tap is a plain play/pause: it starts or stops
+     scrolling directly, picking synced-vs-fixed mode automatically from
+     whether there's anything to sync to (see hasSyncAvailable()). The
+     small panel above the button is not a separate open/close menu -- it
+     just mirrors the "on" state, showing the tempo slider (or "Synced with
+     playback") and, only when there's an actual choice to make, the
+     Autoscroll/Fixed tempo mode picker. ---- */
 
   let fab = null;
-  let fabOutsideHandler = null;
-
-  function closeFabMenu() {
-    if (state && state.autoscroll) state.autoscroll.fabMenuOpen = false;
-    // Unconditional, unlike the flag update above -- this runs from
-    // close() too, after state has already been nulled out (song detail
-    // dismissed while the menu happened to be open), and the listener
-    // still needs removing then or it leaks exactly the same way a missed
-    // call from the button handler used to.
-    if (fabOutsideHandler) {
-      document.removeEventListener("pointerdown", fabOutsideHandler, true);
-      fabOutsideHandler = null;
-    }
-  }
 
   // Transpose-invariant, so it's fine to check straight off the stored raw
   // text without re-parsing through transposeModel.
@@ -711,7 +700,6 @@
       state && state.expanded && state.record && !state.adding && sheetHasLyrics(state.record.raw)
     );
     if (!show) {
-      closeFabMenu();
       if (fab) {
         fab.remove();
         fab = null;
@@ -728,79 +716,57 @@
 
     const btn = el("button", "songsheet__fab-btn", null);
     btn.type = "button";
-    btn.setAttribute("aria-haspopup", "true");
-    btn.setAttribute("aria-expanded", state.autoscroll.fabMenuOpen ? "true" : "false");
-    btn.setAttribute("aria-label", "Autoscroll");
+    btn.setAttribute("aria-pressed", state.autoscroll.on ? "true" : "false");
+    btn.setAttribute("aria-label", state.autoscroll.on ? "Stop autoscroll" : "Start autoscroll");
     if (state.autoscroll.on) btn.classList.add("is-active");
     if (state.autoscroll.on && effectiveSyncedMode()) btn.classList.add("is-synced");
     btn.innerHTML =
       '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      // Re-tapping the button to close has to go through closeFabMenu() too
-      // -- it's the only thing that removes the document-level outside-tap
-      // listener below. Toggling the flag directly here used to skip that
-      // on this path (only the outside-tap route called it), leaking one
-      // capture-phase pointerdown listener per open/close cycle. Each leaked
-      // listener re-ran forever on every tap anywhere in the app (including
-      // a full sheet re-parse via renderFab -> sheetHasLyrics), so a long
-      // session with the autoscroll menu toggled a lot would pile up enough
-      // of them to make the whole app feel frozen.
-      if (state.autoscroll.fabMenuOpen) {
-        closeFabMenu();
-        renderFab();
-        return;
+      if (state.autoscroll.on) {
+        state.autoscroll.on = false;
+        stopAutoscroll();
+      } else {
+        // Pick the pace automatically: follow the recording when there's
+        // something to follow, otherwise fall back to a fixed tempo.
+        state.autoscroll.forceManual = !hasSyncAvailable();
+        state.autoscroll.on = true;
+        startAutoscroll();
       }
-      state.autoscroll.fabMenuOpen = true;
       renderFab();
-      // Registered after this click has finished bubbling, so the same tap
-      // that opened the menu doesn't also close it via the outside handler.
-      setTimeout(() => {
-        if (!state || !state.autoscroll.fabMenuOpen) return;
-        fabOutsideHandler = (ev) => {
-          if (!ev.target.closest || !ev.target.closest(".songsheet__fab")) {
-            closeFabMenu();
-            renderFab();
-          }
-        };
-        document.addEventListener("pointerdown", fabOutsideHandler, true);
-      }, 0);
     });
     fab.appendChild(btn);
 
-    if (state.autoscroll.fabMenuOpen) {
+    if (state.autoscroll.on) {
       const menu = el("div", "songsheet__fab-menu");
-
-      const toggleRow = el("label", "songsheet__scroll-row");
-      toggleRow.appendChild(el("span", null, "Autoscroll"));
-      const toggle = el("input", "songsheet__scroll-toggle");
-      toggle.type = "checkbox";
-      toggle.checked = state.autoscroll.on;
-      toggle.addEventListener("change", () => {
-        state.autoscroll.on = toggle.checked;
-        if (state.autoscroll.on) startAutoscroll();
-        else stopAutoscroll();
-        renderFab();
-      });
-      toggleRow.appendChild(toggle);
-      menu.appendChild(toggleRow);
 
       // Only shown once there's actually a choice to make: with sync points
       // for whatever's currently playing, autoscroll follows the recording
-      // by default -- this is purely the escape hatch back to a fixed pace
-      // (a bad sync, or wanting to drill slower/faster than the recording).
+      // by default -- this is the escape hatch back to a fixed pace (a bad
+      // sync, or wanting to drill slower/faster than the recording).
+      // Either/or, not two independent switches, hence radios rather than
+      // checkboxes.
       if (hasSyncAvailable()) {
-        const modeRow = el("label", "songsheet__scroll-row");
-        modeRow.appendChild(el("span", null, "Fixed tempo"));
-        const modeToggle = el("input", "songsheet__scroll-toggle");
-        modeToggle.type = "checkbox";
-        modeToggle.checked = !!state.autoscroll.forceManual;
-        modeToggle.addEventListener("change", () => {
-          state.autoscroll.forceManual = modeToggle.checked;
-          renderFab();
+        const modes = el("div", "songsheet__scroll-modes");
+        [
+          { label: "Autoscroll", forceManual: false },
+          { label: "Fixed tempo", forceManual: true },
+        ].forEach(({ label, forceManual }) => {
+          const row = el("label", "songsheet__scroll-row");
+          row.appendChild(el("span", null, label));
+          const radio = el("input", "songsheet__scroll-toggle");
+          radio.type = "radio";
+          radio.name = "songsheet-scroll-mode";
+          radio.checked = !!state.autoscroll.forceManual === forceManual;
+          radio.addEventListener("change", () => {
+            state.autoscroll.forceManual = forceManual;
+            renderFab();
+          });
+          row.appendChild(radio);
+          modes.appendChild(row);
         });
-        modeRow.appendChild(modeToggle);
-        menu.appendChild(modeRow);
+        menu.appendChild(modes);
       }
 
       if (effectiveSyncedMode()) {
@@ -862,7 +828,7 @@
       confirmRemove: false,
       syncMode: false,
       confirmClearSync: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), fabMenuOpen: false, forceManual: false },
+      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false },
     };
     root.hidden = false;
     render();
@@ -1124,93 +1090,82 @@
     const shown = transposeModel(model, semis);
 
     /* ---- toolbar: two rows so it doesn't feel like a wall of buttons --
-       the primary row (Edit, Remove -- the two actions on the sheet itself)
+       the primary row (Remove, Edit -- the two actions on the sheet itself)
        stays put; transpose and sync are secondary, so they sit in a quieter
-       row underneath. ---- */
+       row underneath. Sync mode replaces all of that with just the two
+       buttons relevant to placing timestamps -- Edit/Remove/transpose would
+       only get in the way while tapping lines. ---- */
     const bar = el("div", "songsheet__bar");
 
-    const primaryRow = el("div", "songsheet__bar-row");
-    if (state.confirmRemove) {
-      // Inline confirm instead of window.confirm() -- confirm() dialogs are
-      // suppressed in some embedded/preview browser contexts (silently
-      // returning false, so the button looked broken), and a two-tap inline
-      // control is nicer on a phone anyway.
-      const confirmWrap = el("div", "songsheet__confirm");
-      confirmWrap.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
-      const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
-      yes.type = "button";
-      yes.addEventListener("click", () => {
-        deleteSheet(state.inst, state.song.id);
-        state.record = null;
-        state.confirmRemove = false;
-        render();
-      });
-      const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
-      no.type = "button";
-      no.addEventListener("click", () => {
-        state.confirmRemove = false;
-        render();
-      });
-      confirmWrap.appendChild(yes);
-      confirmWrap.appendChild(no);
-      primaryRow.appendChild(confirmWrap);
-    } else {
-      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
-      edit.type = "button";
-      edit.addEventListener("click", () => {
-        state.adding = true;
-        render();
-      });
-      primaryRow.appendChild(edit);
+    if (!state.syncMode) {
+      const primaryRow = el("div", "songsheet__bar-row");
+      if (state.confirmRemove) {
+        // Inline confirm instead of window.confirm() -- confirm() dialogs are
+        // suppressed in some embedded/preview browser contexts (silently
+        // returning false, so the button looked broken), and a two-tap inline
+        // control is nicer on a phone anyway.
+        const confirmWrap = el("div", "songsheet__confirm");
+        confirmWrap.appendChild(el("span", "songsheet__confirm-label", "Remove this sheet?"));
+        const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
+        yes.type = "button";
+        yes.addEventListener("click", () => {
+          deleteSheet(state.inst, state.song.id);
+          state.record = null;
+          state.confirmRemove = false;
+          render();
+        });
+        const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
+        no.type = "button";
+        no.addEventListener("click", () => {
+          state.confirmRemove = false;
+          render();
+        });
+        confirmWrap.appendChild(yes);
+        confirmWrap.appendChild(no);
+        primaryRow.appendChild(confirmWrap);
+      } else {
+        const remove = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
+        remove.type = "button";
+        remove.addEventListener("click", () => {
+          state.confirmRemove = true;
+          render();
+        });
+        primaryRow.appendChild(remove);
 
-      const remove = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Remove");
-      remove.type = "button";
-      remove.addEventListener("click", () => {
-        state.confirmRemove = true;
-        render();
-      });
-      primaryRow.appendChild(remove);
+        const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
+        edit.type = "button";
+        edit.addEventListener("click", () => {
+          state.adding = true;
+          render();
+        });
+        primaryRow.appendChild(edit);
+      }
+      bar.appendChild(primaryRow);
     }
-    bar.appendChild(primaryRow);
 
     const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
-    const tp = el("div", "songsheet__transpose");
-    const minus = el("button", "songsheet__step", "−");
-    minus.type = "button";
-    minus.setAttribute("aria-label", "Transpose down");
-    const plus = el("button", "songsheet__step", "+");
-    plus.type = "button";
-    plus.setAttribute("aria-label", "Transpose up");
-    const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
-    minus.addEventListener("click", () => bumpTranspose(-1));
-    plus.addEventListener("click", () => bumpTranspose(1));
-    tp.appendChild(minus);
-    tp.appendChild(amount);
-    tp.appendChild(plus);
-    secondaryRow.appendChild(tp);
 
-    const syncBtn = el(
-      "button",
-      "songsheet__btn songsheet__btn--sm" + (state.syncMode ? " is-active" : ""),
-      state.syncMode ? "Done syncing" : "Sync"
-    );
-    syncBtn.type = "button";
-    syncBtn.addEventListener("click", () => {
-      state.syncMode = !state.syncMode;
-      state.confirmClearSync = false;
-      // Tapping lines to place timestamps while the view is also scrolling
-      // out from under you doesn't work -- turn autoscroll off going in.
-      if (state.syncMode && state.autoscroll.on) {
-        state.autoscroll.on = false;
-        stopAutoscroll();
-      }
-      render();
-    });
-    secondaryRow.appendChild(syncBtn);
+    if (!state.syncMode) {
+      const tp = el("div", "songsheet__transpose");
+      const minus = el("button", "songsheet__step", "−");
+      minus.type = "button";
+      minus.setAttribute("aria-label", "Transpose down");
+      const plus = el("button", "songsheet__step", "+");
+      plus.type = "button";
+      plus.setAttribute("aria-label", "Transpose up");
+      const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
+      minus.addEventListener("click", () => bumpTranspose(-1));
+      plus.addEventListener("click", () => bumpTranspose(1));
+      tp.appendChild(minus);
+      tp.appendChild(amount);
+      tp.appendChild(plus);
+      secondaryRow.appendChild(tp);
+    }
 
     // Only shown in sync mode, and only once there's something to clear --
     // removing points one at a time by tapping each time-badge is tedious
-    // once there are more than a couple.
+    // once there are more than a couple. Placed left of "Done syncing" (see
+    // below), i.e. appended first.
     const activePlaybackForClear = state.syncMode ? getActivePlayback() : null;
     const clearableCount = activePlaybackForClear
       ? ((state.song.lyricsSync && state.song.lyricsSync[activePlaybackForClear.key]) || []).length
@@ -1237,7 +1192,7 @@
         confirmWrap.appendChild(no);
         secondaryRow.appendChild(confirmWrap);
       } else {
-        const clearSync = el("button", "songsheet__btn songsheet__btn--sm", "Clear timestamps");
+        const clearSync = el("button", "songsheet__btn songsheet__btn--lg songsheet__btn--danger", "Clear timestamps");
         clearSync.type = "button";
         clearSync.addEventListener("click", () => {
           state.confirmClearSync = true;
@@ -1246,6 +1201,26 @@
         secondaryRow.appendChild(clearSync);
       }
     }
+
+    const syncBtn = el(
+      "button",
+      "songsheet__btn" + (state.syncMode ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
+      state.syncMode ? "Done syncing" : "Sync"
+    );
+    syncBtn.type = "button";
+    syncBtn.addEventListener("click", () => {
+      state.syncMode = !state.syncMode;
+      state.confirmClearSync = false;
+      // Tapping lines to place timestamps while the view is also scrolling
+      // out from under you doesn't work -- turn autoscroll off going in.
+      if (state.syncMode && state.autoscroll.on) {
+        state.autoscroll.on = false;
+        stopAutoscroll();
+      }
+      render();
+    });
+    secondaryRow.appendChild(syncBtn);
+
     bar.appendChild(secondaryRow);
     panel.appendChild(bar);
 
@@ -1314,7 +1289,7 @@
         }
         const idx = flatLineIdx++;
         lineWeights[idx] = Math.max(1, (line.lyric || "").trim().length);
-        const lineEl = renderLine(line);
+        const lineEl = renderLine(line, state.syncMode);
         lineEl.dataset.lineIdx = String(idx);
         if (state.syncMode) {
           lineEl.classList.add("ss-line--syncmode");
@@ -1363,6 +1338,11 @@
   let inlineChordAnchor = null;
   let inlineChordOutsideHandler = null;
   let inlineChordScrollHandler = null;
+  // Autoscroll otherwise carries the popover straight off past the chord it
+  // belongs to within a frame or two (via the scroll-close handler below) --
+  // freeze it for as long as the popover is open instead, and pick back up
+  // from wherever it's left when the popover closes.
+  let chordPopoverPausedScroll = false;
 
   function closeInlineChordPopover() {
     if (inlineChordAnchor) inlineChordAnchor.classList.remove("is-active");
@@ -1380,6 +1360,12 @@
       if (box) box.removeEventListener("scroll", inlineChordScrollHandler);
       inlineChordScrollHandler = null;
     }
+    if (chordPopoverPausedScroll) {
+      chordPopoverPausedScroll = false;
+      if (state && state.expanded && state.record && !state.adding && state.autoscroll.on) {
+        startAutoscroll();
+      }
+    }
   }
 
   function toggleInlineChordPopover(anchorEl, sym) {
@@ -1388,6 +1374,13 @@
       return;
     }
     closeInlineChordPopover();
+
+    if (scrollRAF != null) {
+      cancelAnimationFrame(scrollRAF);
+      scrollRAF = null;
+      scrollLastTs = null;
+      chordPopoverPausedScroll = true;
+    }
 
     const card = el("div", "ss-chord-popover");
     document.body.appendChild(card);
@@ -1441,8 +1434,11 @@
 
   // Split a lyric string at each chord index; each piece carries the chord
   // that starts it in a block above. `white-space: pre` on the pieces keeps
-  // the spacing; the pieces are inline and wrap as whole units.
-  function renderLine(line) {
+  // the spacing; the pieces are inline and wrap as whole units. In sync
+  // mode `disableChordTap` drops the chord's own tap handling so a tap
+  // anywhere on the line -- chord included -- reaches the line's own click
+  // handler (addSyncPoint) instead of opening the chord diagram.
+  function renderLine(line, disableChordTap) {
     const wrap = el("div", "ss-line");
     const chords = line.chords.slice().sort((a, b) => a.index - b.index);
     const lyric = line.lyric || "";
@@ -1479,7 +1475,7 @@
       }
       // Real chord symbols only -- bar lines / "N.C." / repeat marks stay
       // plain text, same filter as the chip row's uniqueChords().
-      if (/^[A-G]/.test(ch.sym.trim())) {
+      if (!disableChordTap && /^[A-G]/.test(ch.sym.trim())) {
         chordEl.classList.add("ss-seg__chord--tap");
         chordEl.addEventListener("click", (e) => {
           e.stopPropagation();

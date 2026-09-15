@@ -151,6 +151,15 @@
     });
   }
 
+  // Whether js/songsheet.js has saved lyric-sync timestamps for this song
+  // (against any source it's been played from) -- used to badge the row in
+  // the library list, see renderSongRow below.
+  function songHasTimestamps(song) {
+    const sync = song && song.lyricsSync;
+    if (!sync || typeof sync !== "object") return false;
+    return Object.keys(sync).some((k) => Array.isArray(sync[k]) && sync[k].length > 0);
+  }
+
   /* ---------- Rendering: shared song row ---------- */
   // `withFavStar` toggles the little star button on each row (only saved
   // songs in the library list get one -- search results don't, since they
@@ -201,6 +210,15 @@
     info.querySelector(".song-item__title").textContent = song.title;
     info.querySelector(".song-item__artist").textContent = song.artist;
     li.appendChild(info);
+
+    if (withFavStar && songHasTimestamps(song)) {
+      const syncedBadge = document.createElement("span");
+      syncedBadge.className = "song-item__synced";
+      syncedBadge.setAttribute("aria-label", "Lyrics timed to playback");
+      syncedBadge.innerHTML =
+        '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M10 2h4M12 2v2.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 9v4l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      li.appendChild(syncedBadge);
+    }
 
     li.addEventListener("click", () => openDetail(song));
     return li;

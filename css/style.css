@@ -696,6 +696,19 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .song-item__learning svg path:last-child { fill: currentColor; }
 
+/* Small stopwatch shown when a song has lyric timestamps saved (js/
+   songsheet.js sync mode) -- --good, same color the synced autoscroll FAB
+   and "Synced with playback" status use elsewhere for this feature. */
+.song-item__synced {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--good);
+}
+
 .search-status {
   font-size: 0.85rem;
   color: var(--ink-soft);
@@ -1139,6 +1152,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   font-weight: 600;
 }
 .songsheet__btn--sm { padding: 0.4rem 0.85rem; font-size: 0.8rem; }
+/* Sync mode's two buttons (Clear timestamps, Done syncing) -- bigger than
+   the usual --sm toolbar buttons since they're the only two left on
+   screen while placing timestamps. */
+.songsheet__btn--lg { padding: 0.7rem 1.4rem; font-size: 0.95rem; }
 .songsheet__btn.is-active {
   border-color: var(--amber-deep);
   background: var(--amber);
@@ -1252,6 +1269,13 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   height: 18px;
   accent-color: var(--amber);
   cursor: pointer;
+}
+/* Autoscroll/Fixed tempo -- an either/or choice (radio inputs, reusing
+   .songsheet__scroll-toggle's sizing/color), not two independent switches. */
+.songsheet__scroll-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 .songsheet__scroll-speed {
   display: flex;
