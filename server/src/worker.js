@@ -7,6 +7,10 @@
 //   /logout    { token }                     -> { ok: true }
 //   /song      { artist, title }             -> { candidates: [...] }   429 / 502
 //              { url }                       -> { raw, meta, source, url }   429 / 502
+//   /jam/create { song, sheet }               -> { code, hostToken }    400 / 429
+//   /jam/update { code, hostToken, song?, sheet?, mode?, pos? } -> { ok, participantCount }  403 / 404
+//   /jam/poll   { code, followerId }          -> { ok, song, sheet, mode, pos, participantCount }  404
+//   /jam/end    { code, hostToken }           -> { ok: true }           403 / 404
 //
 // "libraries" is { guitar: {songs,tombstones}, piano: {songs,tombstones} }.
 // The server keeps its own copy and returns the MERGE of what it had and
@@ -23,6 +27,14 @@
 // Both cache in D1 (table `sheets`); `refresh: true` re-fetches past the
 // cache. It's an open endpoint, lightly rate-limited per IP; if it ever gets
 // abused, gate it behind userForToken() the way /sync is.
+//
+// /jam/* -- "samen jammen": a host broadcasts where it is in a song so
+// friends can follow along on their own phones. No WebSocket/Durable
+// Object -- followers poll, which is a bit laggier (a second or two) but
+// keeps this on the same free Workers+D1 plan as everything else here. See
+// the jam_sessions comment in schema.sql for the full design. `hostToken`
+// (returned once, from /jam/create) authorises /jam/update and /jam/end;
+// anyone with the 4-char `code` can /jam/poll.
 
 const INSTRUMENTS = ["guitar", "piano"];
 const TOMB_TTL_MS = 150 * 24 * 60 * 60 * 1000;
@@ -34,6 +46,12 @@ const SONG_RATE_MAX = 40; // upstream chord-sheet fetches...
 const SONG_RATE_WINDOW_MS = 60 * 60 * 1000; // ...per client IP per hour (cache hits don't count)
 const SCRAPE_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+const JAM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L -- easy to read aloud
+const JAM_CREATE_MAX = 20; // /jam/create attempts...
+const JAM_CREATE_WINDOW_MS = 60 * 60 * 1000; // ...per client IP per hour
+const JAM_STALE_MS = 45 * 1000; // no host update in this long -> followers treat it as ended
+const JAM_PRESENCE_TTL_MS = 8 * 1000; // a follower who hasn't polled in this long doesn't count
 
 export default {
   async fetch(request, env) {
@@ -54,6 +72,10 @@ export default {
       if (path === "/sync") return await sync(env, body);
       if (path === "/logout") return await logout(env, body);
       if (path === "/song") return await song(env, body, request);
+      if (path === "/jam/create") return await jamCreate(env, body, request);
+      if (path === "/jam/update") return await jamUpdate(env, body);
+      if (path === "/jam/poll") return await jamPoll(env, body);
+      if (path === "/jam/end") return await jamEnd(env, body);
       return json({ error: "Not found" }, 404);
     } catch (err) {
       return json({ error: "Server error", detail: String(err && err.message || err) }, 500);
@@ -314,6 +336,185 @@ async function songRateLimited(env, ip) {
     .bind(ip, cutoff)
     .first();
   return row && row.n >= SONG_RATE_MAX;
+}
+
+/* ---------- /jam/*: "samen jammen" ----------
+   One row in jam_sessions per active jam, keyed by a 4-char code. The host
+   is the only writer (via /jam/update, gated by hostToken); followers only
+   ever read (/jam/poll) and touch their own presence row. mode/pos together
+   describe "where the host currently is" in whichever of the app's three
+   existing autoscroll mechanisms it's using -- js/jam.js on the client maps
+   that straight onto the same rendering songsheet.js already has for the
+   host's own screen, so a follower's view is pixel-for-pixel the same
+   highlight/scroll logic, just fed by polled state instead of local
+   audio/mic/timestamps. ---- */
+
+// A jam can be created before any song is open -- the host picks "Start a
+// jam" from Settings, gets a code to share immediately, and the first song
+// (song/sheet fields) arrives later via /jam/update once they open one
+// with lyrics. Followers who join before that see a "waiting" state.
+async function jamCreate(env, body, request) {
+  const song = (body && body.song) || {};
+  const sheet = (body && body.sheet) || {};
+  const raw = String(sheet.raw || "");
+
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (await jamCreateRateLimited(env, ip)) {
+    return json({ error: "Too many jams started this hour -- wait a bit." }, 429);
+  }
+  await env.DB.prepare("INSERT INTO jam_create_attempts (ip, ts) VALUES (?, ?)").bind(ip, Date.now()).run();
+
+  const hostToken = randomHex(16);
+  const now = Date.now();
+  let code = null;
+  for (let attempt = 0; attempt < 6 && !code; attempt++) {
+    const candidate = randomJamCode();
+    const existing = await env.DB.prepare("SELECT code FROM jam_sessions WHERE code = ?").bind(candidate).first();
+    if (!existing) code = candidate;
+  }
+  if (!code) return json({ error: "Couldn't allocate a jam code -- try again." }, 500);
+
+  await env.DB
+    .prepare(
+      "INSERT INTO jam_sessions (code, host_token, song_title, song_artist, song_art, sheet_raw, sheet_transpose, mode, created_at, updated_at) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?)"
+    )
+    .bind(
+      code,
+      hostToken,
+      String(song.title || "").slice(0, 200),
+      String(song.artist || "").slice(0, 200),
+      song.art ? String(song.art).slice(0, 4000) : null,
+      raw.slice(0, 100000),
+      sheet.transpose | 0,
+      "none",
+      now,
+      now
+    )
+    .run();
+
+  return json({ code, hostToken });
+}
+
+// Partial update -- only the fields the client includes get written, so a
+// once-a-second position tick doesn't have to re-send the whole sheet text.
+async function jamUpdate(env, body) {
+  const code = normJamCode(body && body.code);
+  const hostToken = String((body && body.hostToken) || "");
+  if (!code) return json({ error: "Bad code" }, 400);
+
+  const row = await env.DB.prepare("SELECT host_token FROM jam_sessions WHERE code = ?").bind(code).first();
+  if (!row) return json({ error: "Jam not found" }, 404);
+  if (!timingSafeEqual(hostToken, row.host_token)) return json({ error: "Not the host" }, 403);
+
+  const sets = ["updated_at = ?"];
+  const vals = [Date.now()];
+
+  const song = body.song;
+  if (song && typeof song === "object") {
+    sets.push("song_title = ?", "song_artist = ?", "song_art = ?");
+    vals.push(
+      String(song.title || "").slice(0, 200),
+      String(song.artist || "").slice(0, 200),
+      song.art ? String(song.art).slice(0, 4000) : null
+    );
+  }
+  const sheet = body.sheet;
+  if (sheet && typeof sheet === "object") {
+    sets.push("sheet_raw = ?", "sheet_transpose = ?");
+    vals.push(String(sheet.raw || "").slice(0, 100000), sheet.transpose | 0);
+  }
+  if (typeof body.mode === "string") {
+    sets.push("mode = ?");
+    vals.push(["none", "timestamps", "autoscroll", "playalong"].includes(body.mode) ? body.mode : "none");
+  }
+  const pos = body.pos;
+  if (pos && typeof pos === "object") {
+    sets.push("pos_fraction = ?", "pos_index = ?");
+    vals.push(
+      Number.isFinite(pos.fraction) ? pos.fraction : null,
+      Number.isFinite(pos.index) ? pos.index : null
+    );
+  }
+  vals.push(code);
+  await env.DB.prepare(`UPDATE jam_sessions SET ${sets.join(", ")} WHERE code = ?`).bind(...vals).run();
+
+  return json({ ok: true, participantCount: await jamParticipantCount(env, code) });
+}
+
+async function jamPoll(env, body) {
+  const code = normJamCode(body && body.code);
+  if (!code) return json({ error: "Bad code" }, 400);
+
+  const row = await env.DB.prepare("SELECT * FROM jam_sessions WHERE code = ?").bind(code).first();
+  if (!row || Date.now() - row.updated_at > JAM_STALE_MS) {
+    return json({ error: "Jam not found or has ended" }, 404);
+  }
+
+  const followerId = String((body && body.followerId) || "").slice(0, 64);
+  if (followerId) {
+    await env.DB
+      .prepare(
+        "INSERT INTO jam_presence (code, follower_id, last_seen) VALUES (?,?,?) " +
+          "ON CONFLICT(code, follower_id) DO UPDATE SET last_seen = excluded.last_seen"
+      )
+      .bind(code, followerId, Date.now())
+      .run();
+  }
+
+  return json({
+    ok: true,
+    song: { title: row.song_title, artist: row.song_artist, art: row.song_art },
+    sheet: { raw: row.sheet_raw, transpose: row.sheet_transpose },
+    mode: row.mode,
+    pos: { fraction: row.pos_fraction, index: row.pos_index },
+    participantCount: await jamParticipantCount(env, code),
+    updatedAt: row.updated_at,
+  });
+}
+
+async function jamEnd(env, body) {
+  const code = normJamCode(body && body.code);
+  const hostToken = String((body && body.hostToken) || "");
+  if (!code) return json({ error: "Bad code" }, 400);
+
+  const row = await env.DB.prepare("SELECT host_token FROM jam_sessions WHERE code = ?").bind(code).first();
+  if (!row) return json({ ok: true }); // already gone -- ending twice is fine
+  if (!timingSafeEqual(hostToken, row.host_token)) return json({ error: "Not the host" }, 403);
+
+  await env.DB.prepare("DELETE FROM jam_sessions WHERE code = ?").bind(code).run();
+  await env.DB.prepare("DELETE FROM jam_presence WHERE code = ?").bind(code).run();
+  return json({ ok: true });
+}
+
+async function jamParticipantCount(env, code) {
+  const cutoff = Date.now() - JAM_PRESENCE_TTL_MS;
+  await env.DB.prepare("DELETE FROM jam_presence WHERE code = ? AND last_seen < ?").bind(code, cutoff).run();
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM jam_presence WHERE code = ?").bind(code).first();
+  return (row && row.n) || 0;
+}
+
+async function jamCreateRateLimited(env, ip) {
+  const cutoff = Date.now() - JAM_CREATE_WINDOW_MS;
+  await env.DB.prepare("DELETE FROM jam_create_attempts WHERE ts < ?").bind(cutoff).run();
+  const row = await env.DB
+    .prepare("SELECT COUNT(*) AS n FROM jam_create_attempts WHERE ip = ? AND ts > ?")
+    .bind(ip, cutoff)
+    .first();
+  return row && row.n >= JAM_CREATE_MAX;
+}
+
+function randomJamCode() {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  let s = "";
+  for (let i = 0; i < 4; i++) s += JAM_CODE_ALPHABET[bytes[i] % JAM_CODE_ALPHABET.length];
+  return s;
+}
+
+function normJamCode(code) {
+  const c = String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return c.length === 4 ? c : null;
 }
 
 /* ---- source: Ultimate Guitar ---- */

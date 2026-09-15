@@ -535,6 +535,66 @@
     return topF + (topC - topF) * frac - box.clientHeight * 0.3;
   }
 
+  // The inverse of virtualLineToScrollTop() above -- given where the
+  // container is currently scrolled to, which fractional line sits at that
+  // same "a third of the way down" reference point. Used to report the
+  // host's position for js/jam.js regardless of which of the two
+  // autoscroll flavors put it there (synced or fixed-tempo both just move
+  // box.scrollTop in the end) without needing tickManual/tickSynced to
+  // track it themselves -- called at most once a second, not per frame, so
+  // walking every rendered line's getBoundingClientRect() here is fine.
+  function scrollTopToVirtualLine(box) {
+    const lines = panel ? panel.querySelectorAll("[data-line-idx]") : [];
+    if (!lines.length) return 0;
+    const boxRect = box.getBoundingClientRect();
+    const targetY = box.scrollTop + box.clientHeight * 0.3;
+    let best = 0;
+    let bestTop = -Infinity;
+    for (let i = 0; i < lines.length; i++) {
+      const top = lines[i].getBoundingClientRect().top - boxRect.top + box.scrollTop;
+      if (top <= targetY) {
+        best = i;
+        bestTop = top;
+      } else {
+        const frac = top > bestTop ? (targetY - bestTop) / (top - bestTop) : 0;
+        return best + Math.max(0, Math.min(1, frac));
+      }
+    }
+    return best;
+  }
+
+  // A snapshot of "what the host is currently looking at", polled by
+  // js/jam.js roughly once a second while hosting a jam -- null when
+  // there's no open sheet with lyrics to follow. pos.line is a fractional
+  // index into the flat line list (same units scrollTopToVirtualLine/
+  // virtualLineToScrollTop use), not a pixel or scrollHeight fraction --
+  // that's what makes it portable to a follower's screen, which can have a
+  // completely different line-wrap layout (width, font size, ...) for the
+  // exact same text.
+  function getJamSnapshot() {
+    if (!state || !state.record || !sheetHasLyrics(state.record.raw)) return null;
+    const snapshot = {
+      song: {
+        title: (state.song && state.song.title) || "",
+        artist: (state.song && state.song.artist) || "",
+        art: (state.song && state.song.artworkUrl) || null,
+      },
+      sheet: { raw: state.record.raw, transpose: state.record.transpose | 0 },
+      mode: "none",
+      pos: { line: null, index: null },
+    };
+    if (state.playAlong.on) {
+      snapshot.mode = "playalong";
+      snapshot.pos.index = state.playAlong.index;
+    } else if (state.autoscroll.on && panel) {
+      const box = scrollContainer();
+      const synced = !state.autoscroll.forceManual && getActivePlayback();
+      snapshot.mode = synced ? "timestamps" : "autoscroll";
+      snapshot.pos.line = scrollTopToVirtualLine(box);
+    }
+    return snapshot;
+  }
+
   function tickSynced(box, synced) {
     // Manual pacing's own clock is stale once we're back in manual mode
     // (forceManual toggled, or playback stopped) -- null it so tickManual
@@ -1988,5 +2048,18 @@
 
   // library.js drives this: open() when a song detail is shown, close() when
   // it's dismissed or the instrument switches.
-  window.GuitarSongSheet = { open, close };
+  // js/jam.js (host side) reads getJamSnapshot() to know what to broadcast;
+  // (follower side) reuses parseSheet/transposeModel/renderLine/
+  // buildChordSteps/uniqueChords to render a received sheet exactly the way
+  // this file renders the host's own, without duplicating that logic.
+  window.GuitarSongSheet = {
+    open,
+    close,
+    getJamSnapshot,
+    parseSheet,
+    transposeModel,
+    renderLine,
+    buildChordSteps,
+    uniqueChords,
+  };
 })();
