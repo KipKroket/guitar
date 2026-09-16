@@ -281,7 +281,10 @@
   // Draw the diagram for a free-text chord symbol into `el`. Returns true when
   // a shape was actually drawn (piano always draws; guitar can come up empty
   // for a rootless/odd symbol).
-  function renderInto(el, symbol) {
+  // instrumentOverride ("guitar" | "piano") skips the app-wide instrument
+  // setting -- used by js/jam.js so a follower can flip just their own
+  // chord diagrams to piano without switching their whole app identity.
+  function renderInto(el, symbol, instrumentOverride) {
     if (!el) return false;
     const parsed = parseSymbol(symbol);
     if (!parsed) {
@@ -289,7 +292,7 @@
       return false;
     }
     const quality = QUALITIES.find((q) => q.key === parsed.qualityKey) || QUALITIES[0];
-    const piano = currentInstrument() === "piano";
+    const piano = (instrumentOverride || currentInstrument()) === "piano";
     let svg = "";
     let hint = "";
     if (piano) {

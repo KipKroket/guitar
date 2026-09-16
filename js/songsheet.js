@@ -556,7 +556,17 @@
         best = i;
         bestTop = top;
       } else {
-        const frac = top > bestTop ? (targetY - bestTop) / (top - bestTop) : 0;
+        // bestTop is still -Infinity when even the very first line sits
+        // below the target reading position -- a tall header (art + title +
+        // chip row) above a short song can easily push line 0 that far down
+        // on a roomy viewport. (targetY - -Infinity) / (top - -Infinity) is
+        // Infinity/Infinity there, i.e. NaN -- silently breaking every jam
+        // follower's scroll sync, since this NaN went out over the wire as
+        // pos.line and was never a visible error locally. "Still above the
+        // first line" is virtual line 0, same as the no-lines-rendered case
+        // above.
+        if (bestTop === -Infinity) return 0;
+        const frac = (targetY - bestTop) / (top - bestTop);
         return best + Math.max(0, Math.min(1, frac));
       }
     }
@@ -1736,7 +1746,11 @@
         }
         const idx = flatLineIdx++;
         lineWeights[idx] = Math.max(1, (line.lyric || "").trim().length);
-        const lineEl = renderLine(line, state.syncMode, idx, playAlongKeys);
+        // Play along repurposes a tap on the chord itself for its own line-
+        // jump (see the click handler added just below) -- if chord-tap for
+        // the diagram popover stayed on too, tapping near a chord to jump
+        // would show the diagram instead almost every time.
+        const lineEl = renderLine(line, state.syncMode || state.playAlong.on, idx, playAlongKeys);
         lineEl.dataset.lineIdx = String(idx);
         if (state.playAlong.on) {
           lineEl.classList.add("ss-line--syncable");
@@ -1822,7 +1836,7 @@
     }
   }
 
-  function toggleInlineChordPopover(anchorEl, sym) {
+  function toggleInlineChordPopover(anchorEl, sym, instrumentOverride) {
     if (inlineChordAnchor === anchorEl) {
       closeInlineChordPopover();
       return;
@@ -1839,7 +1853,7 @@
     const card = el("div", "ss-chord-popover");
     document.body.appendChild(card);
     const ok = window.GuitarChords && window.GuitarChords.renderInto
-      ? window.GuitarChords.renderInto(card, sym)
+      ? window.GuitarChords.renderInto(card, sym, instrumentOverride)
       : false;
     if (!ok && !card.textContent) card.textContent = "No diagram for " + sym + ".";
 
@@ -1894,8 +1908,11 @@
   // handler (addSyncPoint) instead of opening the chord diagram. `lineIdx`
   // + `playAlongKeys` (a Set of "lineIdx:order" strings, or null when play
   // along isn't on) are only used to mark whichever chord occurrence is
-  // the currently-live play-along step -- see buildChordSteps().
-  function renderLine(line, disableChordTap, lineIdx, playAlongKeys) {
+  // the currently-live play-along step -- see buildChordSteps(). +
+  // `instrumentOverride` ("guitar" | "piano") is passed straight through to
+  // the tapped-chord popover -- js/jam.js uses it so a jam follower can view
+  // diagrams in their own chosen instrument regardless of the host's.
+  function renderLine(line, disableChordTap, lineIdx, playAlongKeys, instrumentOverride) {
     const wrap = el("div", "ss-line");
     const chords = line.chords.slice().sort((a, b) => a.index - b.index);
     const lyric = line.lyric || "";
@@ -1944,7 +1961,7 @@
         chordEl.classList.add("ss-seg__chord--tap");
         chordEl.addEventListener("click", (e) => {
           e.stopPropagation();
-          toggleInlineChordPopover(chordEl, ch.sym);
+          toggleInlineChordPopover(chordEl, ch.sym, instrumentOverride);
         });
       }
       seg.appendChild(chordEl);

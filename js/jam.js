@@ -35,6 +35,13 @@
   let followerShown = null; // transposeModel() result for the currently rendered sheet
   let followerSteps = null; // buildChordSteps() result for the currently rendered sheet
   let followerChordEls = null; // "lineIdx:order" -> chord element, for incremental play-along highlighting
+  let followerLastData = null; // most recent /poll response, reapplied after an instrument-toggle rebuild
+  // Which instrument's diagrams a follower sees for chord chips/popovers --
+  // independent of the host's own instrument and of this follower's own app
+  // identity (switching that would also flip the tuner, nav colours, etc.
+  // just to read a chord while jamming). Starts matching this follower's own
+  // app so the common case -- a piano player joining -- needs no tap at all.
+  let followerInstrument = (window.GuitarApp && window.GuitarApp.getInstrument()) || document.body.dataset.instrument || "guitar";
 
   function el(tag, className, text) {
     const n = document.createElement(tag);
@@ -298,6 +305,22 @@
       updateFollowToggleUI();
     });
     followRow.appendChild(followToggle);
+
+    const instrumentToggle = el("button", "jam-view__follow-toggle");
+    instrumentToggle.type = "button";
+    instrumentToggle.addEventListener("click", () => {
+      followerInstrument = followerInstrument === "piano" ? "guitar" : "piano";
+      updateInstrumentToggleUI();
+      if (followerShown) {
+        const SS = window.GuitarSongSheet;
+        const scrollTop = followerEls.root.scrollTop;
+        renderFollowerChips(SS, followerShown);
+        renderFollowerBody(SS, followerShown);
+        followerEls.root.scrollTop = scrollTop;
+        if (followerLastData) applyFollowerHighlight(followerLastData);
+      }
+    });
+    followRow.appendChild(instrumentToggle);
     root.appendChild(followRow);
 
     const waiting = el("p", "jam-view__waiting", "Waiting for the host to open a song…");
@@ -311,8 +334,9 @@
     body.hidden = true;
     root.appendChild(body);
 
-    followerEls = { root, art, title, artist, followToggle, waiting, chipsWrap, body };
+    followerEls = { root, art, title, artist, followToggle, instrumentToggle, waiting, chipsWrap, body };
     updateFollowToggleUI();
+    updateInstrumentToggleUI();
   }
 
   function teardownFollowerView() {
@@ -332,8 +356,14 @@
     followerEls.followToggle.classList.toggle("is-active", autoFollow);
   }
 
+  function updateInstrumentToggleUI() {
+    if (!followerEls) return;
+    followerEls.instrumentToggle.textContent = followerInstrument === "piano" ? "Piano chords" : "Guitar chords";
+  }
+
   function updateFollowerView(data) {
     if (!followerEls) ensureFollowerView();
+    followerLastData = data;
     const SS = window.GuitarSongSheet;
     const song = data.song || {};
     const sheet = data.sheet || { raw: "", transpose: 0 };
@@ -388,7 +418,9 @@
         chip.classList.add("is-active");
         card.hidden = false;
         card.textContent = "";
-        const ok = window.GuitarChords && window.GuitarChords.renderInto ? window.GuitarChords.renderInto(card, sym) : false;
+        const ok = window.GuitarChords && window.GuitarChords.renderInto
+          ? window.GuitarChords.renderInto(card, sym, followerInstrument)
+          : false;
         if (!ok && !card.textContent) card.textContent = "No diagram for " + sym + ".";
       });
       row.appendChild(chip);
@@ -409,7 +441,7 @@
           return;
         }
         const idx = flatLineIdx++;
-        const lineEl = SS.renderLine(line, false, idx, null);
+        const lineEl = SS.renderLine(line, false, idx, null, followerInstrument);
         lineEl.dataset.lineIdx = String(idx);
         sec.appendChild(lineEl);
       });

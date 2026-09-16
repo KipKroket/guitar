@@ -117,12 +117,18 @@
     // listening for right now: the current step (so "still on this
     // chord" can win and nothing advances) plus a short lookahead window.
     _bestCandidate() {
+      // this.chroma holds raw smoothed energy, not a unit vector -- has to be
+      // normalised here (matching template()'s own normalise() call) or the
+      // "cosine" below is really just a dot product that scales with how
+      // loud the strum was, so it almost never clears MATCH_THRESHOLD and
+      // the detector reads as "not listening" no matter what's played.
+      const liveVec = normalise(this.chroma);
       let best = null;
       let bestScore = MATCH_THRESHOLD;
       for (let k = 0; k <= STEP_LOOKAHEAD; k++) {
         const sym = this.steps[this.index + k];
         if (sym == null) break;
-        const score = cosine(this.chroma, this._templateFor(sym));
+        const score = cosine(liveVec, this._templateFor(sym));
         if (score > bestScore) {
           bestScore = score;
           best = { sym, offset: k };

@@ -696,9 +696,9 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 }
 .song-item__learning svg path:last-child { fill: currentColor; }
 
-/* Small stopwatch shown when a song has lyric timestamps saved (js/
-   songsheet.js sync mode) -- --good, same color the synced autoscroll FAB
-   and "Synced with playback" status use elsewhere for this feature. */
+/* Small "note in motion" icon shown when a song has lyric timestamps saved
+   (js/songsheet.js sync mode) -- --good, same color the synced autoscroll
+   FAB and "Synced with playback" status use elsewhere for this feature. */
 .song-item__synced {
   display: flex;
   align-items: center;
@@ -1908,7 +1908,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
    by the chip row and the chord book, via the shared .mini-chord__* rules. */
 .ss-chord-popover {
   position: fixed;
-  z-index: 26;
+  /* Above .jam-view (30) too -- js/jam.js reuses this same tapped-chord
+     popover for a jam follower's lyrics, which render inside that
+     full-screen overlay. */
+  z-index: 31;
   width: 11rem;
   padding: 0.85rem;
   background: var(--surface);
@@ -2234,7 +2237,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.jam-view__follow-row { margin-bottom: 0.8rem; }
+.jam-view__follow-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
 .jam-view__follow-toggle {
   padding: 0.35rem 0.75rem;
   border-radius: 999px;
