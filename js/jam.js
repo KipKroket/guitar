@@ -95,18 +95,18 @@
 
   async function startJam() {
     if (session && session.role === "follower") leaveJam();
-    setIdleStatus("Starting…", false);
+    setStatus(settingsEls.hostStatus, "Starting…", false);
     try {
       const data = await api("/create", { song: {}, sheet: { raw: "" } });
       saveSession({ role: "host", code: data.code, hostToken: data.hostToken });
       lastSentSnapshot = null;
       hostParticipantCount = 0;
-      setIdleStatus("", false);
+      setStatus(settingsEls.hostStatus, "", false);
       hostTimer = setInterval(hostTick, HOST_TICK_MS);
       hostTick();
       render();
     } catch (err) {
-      setIdleStatus(err.message || "Couldn't start a jam.", true);
+      setStatus(settingsEls.hostStatus, err.message || "Couldn't start a jam.", true);
     }
   }
 
@@ -218,11 +218,11 @@
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "");
     if (code.length !== 4) {
-      setIdleStatus("Enter the 4-letter code.", true);
+      setStatus(settingsEls.joinStatus, "Enter the 4-letter code.", true);
       return;
     }
     if (session && session.role === "host") await stopJam();
-    setIdleStatus("Joining…", false);
+    setStatus(settingsEls.joinStatus, "Joining…", false);
     const followerId = randomId();
     try {
       const data = await api("/poll", { code, followerId });
@@ -233,7 +233,8 @@
       startFollowTimer();
       render();
     } catch (err) {
-      setIdleStatus(
+      setStatus(
+        settingsEls.joinStatus,
         err.status === 404 ? "That code wasn't found — check with the host." : "Couldn't join — try again.",
         true
       );
@@ -265,7 +266,7 @@
     } catch (err) {
       if (err.status === 404) {
         leaveJam();
-        setIdleStatus("The jam has ended.", false);
+        setStatus(settingsEls.joinStatus, "The jam has ended.", false);
       }
       // else: transient -- try again next tick
     }
@@ -541,10 +542,13 @@
      ===================================================================== */
 
   const settingsEls = {
-    group: document.getElementById("jam-group"),
-    idle: document.getElementById("jam-idle"),
-    idleStatus: document.getElementById("jam-idle-status"),
+    hostGroup: document.getElementById("jam-host-group"),
+    joinGroup: document.getElementById("jam-join-group"),
+    hostIdle: document.getElementById("jam-host-idle"),
+    hostStatus: document.getElementById("jam-host-status"),
     startBtn: document.getElementById("jam-start-btn"),
+    joinIdle: document.getElementById("jam-join-idle"),
+    joinStatus: document.getElementById("jam-join-status"),
     joinInput: document.getElementById("jam-join-code"),
     joinBtn: document.getElementById("jam-join-btn"),
     hosting: document.getElementById("jam-hosting"),
@@ -557,18 +561,24 @@
     leaveBtn: document.getElementById("jam-leave-btn"),
   };
 
-  function setIdleStatus(msg, isError) {
-    if (!settingsEls.idleStatus) return;
-    settingsEls.idleStatus.textContent = msg || "";
-    settingsEls.idleStatus.classList.toggle("is-error", Boolean(isError));
+  function setStatus(el, msg, isError) {
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("is-error", Boolean(isError));
   }
 
   function renderSettings() {
-    if (!settingsEls.group) return;
+    if (!settingsEls.hostGroup) return;
     const isHost = session && session.role === "host";
     const isFollower = session && session.role === "follower";
-    settingsEls.idle.hidden = !!session;
+    // Hosting and following are mutually exclusive, so each card is hidden
+    // entirely while the other role is active rather than showing a
+    // disabled state -- one fewer thing to explain in the UI.
+    settingsEls.hostGroup.hidden = isFollower;
+    settingsEls.joinGroup.hidden = isHost;
+    settingsEls.hostIdle.hidden = !!session;
     settingsEls.hosting.hidden = !isHost;
+    settingsEls.joinIdle.hidden = !!session;
     settingsEls.following.hidden = !isFollower;
     if (isHost) {
       settingsEls.hostCode.textContent = session.code;
@@ -645,7 +655,7 @@
   }
 
   function wireSettingsButtons() {
-    if (!settingsEls.group) return;
+    if (!settingsEls.hostGroup) return;
     settingsEls.startBtn.addEventListener("click", startJam);
     settingsEls.joinBtn.addEventListener("click", () => joinJam(settingsEls.joinInput.value));
     settingsEls.joinInput.addEventListener("keydown", (e) => {

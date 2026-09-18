@@ -282,22 +282,21 @@
       </div>
       <div class="settings-list">
         <!-- Samen jammen: share your lyrics/chords scroll live with friends
-             in the room, or follow someone else's. See js/jam.js. -->
-        <div class="settings-row settings-row--stack" id="jam-group">
+             in the room, or follow someone else's. Split into a host card
+             and a join card (rather than one card doing both) so the two
+             very different actions don't compete for the same buttons. See
+             js/jam.js. -->
+        <div class="settings-row settings-row--stack" id="jam-host-group">
           <div>
-            <div class="settings-row__title">Jam together</div>
-            <div class="settings-row__desc">Share your lyrics &amp; chords scroll live with friends in the room, or follow someone else's.</div>
+            <div class="settings-row__title">Host a jam</div>
+            <div class="settings-row__desc">Share your lyrics &amp; chords scroll live with friends in the room.</div>
           </div>
 
-          <div id="jam-idle">
+          <div id="jam-host-idle">
             <div class="stack-actions">
               <button id="jam-start-btn" class="custom-song__save" type="button">Start a jam</button>
             </div>
-            <div class="stack-fields">
-              <input id="jam-join-code" class="custom-song__input" type="text" placeholder="4-letter code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="4">
-              <button id="jam-join-btn" class="custom-song__save" type="button">Join</button>
-            </div>
-            <p class="settings-note" id="jam-idle-status"></p>
+            <p class="settings-note" id="jam-host-status"></p>
           </div>
 
           <div id="jam-hosting" hidden>
@@ -306,6 +305,21 @@
               <button id="jam-host-share-btn" class="custom-song__save" type="button">Share link</button>
               <button id="jam-host-stop-btn" class="custom-song__cancel" type="button">Stop jam</button>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-row settings-row--stack" id="jam-join-group">
+          <div>
+            <div class="settings-row__title">Join a jam</div>
+            <div class="settings-row__desc">Follow someone else's lyrics &amp; chords, live.</div>
+          </div>
+
+          <div id="jam-join-idle">
+            <div class="stack-fields">
+              <input id="jam-join-code" class="custom-song__input" type="text" placeholder="4-letter code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="4">
+              <button id="jam-join-btn" class="custom-song__save" type="button">Join</button>
+            </div>
+            <p class="settings-note" id="jam-join-status"></p>
           </div>
 
           <div id="jam-following" hidden>
