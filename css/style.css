@@ -586,12 +586,22 @@ select {
   z-index: 0;
 }
 
-body[data-instrument="piano"] .instrument-switch__thumb { transform: translateX(33px); }
+/* Selector matches either the app-wide body[data-instrument] (the real
+   library/chord-book switches) or a data-instrument set directly on an
+   .instrument-switch itself (the jam follower's own chord-diagram toggle,
+   see js/jam.js -- that one tracks its own state, independent of the
+   body's instrument). */
+body[data-instrument="piano"] .instrument-switch__thumb,
+.instrument-switch[data-instrument="piano"] .instrument-switch__thumb {
+  transform: translateX(33px);
+}
 
 /* Whichever icon the thumb sits under flips to the thumb's contrast colour;
    the other stays muted. */
 body[data-instrument="guitar"] .instrument-switch__icon--guitar,
-body[data-instrument="piano"] .instrument-switch__icon--piano {
+body[data-instrument="piano"] .instrument-switch__icon--piano,
+.instrument-switch[data-instrument="guitar"] .instrument-switch__icon--guitar,
+.instrument-switch[data-instrument="piano"] .instrument-switch__icon--piano {
   color: var(--bg);
 }
 
@@ -2105,14 +2115,16 @@ body[data-instrument="piano"] .instrument-switch__icon--piano {
 
 /* ---------- Samen jammen (js/jam.js) ---------- */
 
-/* Persistent pill next to the Settings gear while a jam is active (hosting
-   or following) -- position:absolute against .app, same anchor as
-   .settings-fab, but above overlays (z-index 20) so it stays visible while
-   browsing a song. */
+/* Persistent pill while a jam is active (hosting or following) --
+   position:absolute against .app, same top anchor as .settings-fab, but
+   above overlays (z-index 20) so it stays visible while browsing a song.
+   Sits to the right of the page title (Library/Chords/Settings all clear
+   by this offset) rather than next to the gear, where it used to overlap
+   the title text. */
 .jam-island {
   position: absolute;
   top: calc(env(safe-area-inset-top) + 0.5rem);
-  left: 3.35rem;
+  left: 10.5rem;
   z-index: 21;
 }
 .jam-island[hidden] { display: none; }

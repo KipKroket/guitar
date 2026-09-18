@@ -306,17 +306,31 @@
     });
     followRow.appendChild(followToggle);
 
-    const instrumentToggle = el("button", "jam-view__follow-toggle");
+    // Same segmented icon slider as the library/chord-book headers (see
+    // .instrument-switch in css/style.css) rather than a plain text pill --
+    // it needs its own data-instrument (not body[data-instrument]) since it
+    // tracks only this follower's chord-diagram choice.
+    const instrumentToggle = el("button", "instrument-switch");
     instrumentToggle.type = "button";
+    instrumentToggle.setAttribute("role", "switch");
+    instrumentToggle.setAttribute("aria-label", "Switch chord diagrams between guitar and piano");
+    instrumentToggle.innerHTML =
+      '<span class="instrument-switch__icon instrument-switch__icon--guitar" aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>' +
+      '</span>' +
+      '<span class="instrument-switch__icon instrument-switch__icon--piano" aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="3" y="5" width="18" height="14" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 5v9M12 5v9M16 5v9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' +
+      '</span>' +
+      '<span class="instrument-switch__thumb" aria-hidden="true"></span>';
     instrumentToggle.addEventListener("click", () => {
       followerInstrument = followerInstrument === "piano" ? "guitar" : "piano";
       updateInstrumentToggleUI();
       if (followerShown) {
         const SS = window.GuitarSongSheet;
-        const scrollTop = followerEls.root.scrollTop;
+        const scrollTop = followerEls.body.scrollTop;
         renderFollowerChips(SS, followerShown);
         renderFollowerBody(SS, followerShown);
-        followerEls.root.scrollTop = scrollTop;
+        followerEls.body.scrollTop = scrollTop;
         if (followerLastData) applyFollowerHighlight(followerLastData);
       }
     });
@@ -358,7 +372,9 @@
 
   function updateInstrumentToggleUI() {
     if (!followerEls) return;
-    followerEls.instrumentToggle.textContent = followerInstrument === "piano" ? "Piano chords" : "Guitar chords";
+    const piano = followerInstrument === "piano";
+    followerEls.instrumentToggle.dataset.instrument = followerInstrument;
+    followerEls.instrumentToggle.setAttribute("aria-checked", piano ? "true" : "false");
   }
 
   function updateFollowerView(data) {
@@ -387,7 +403,7 @@
       followerSteps = SS.buildChordSteps(followerShown);
       renderFollowerChips(SS, followerShown);
       renderFollowerBody(SS, followerShown);
-      followerEls.root.scrollTop = 0;
+      followerEls.body.scrollTop = 0;
     }
 
     applyFollowerHighlight(data);
@@ -508,7 +524,14 @@
     if (!autoFollow) return;
     if (data.mode !== "timestamps" && data.mode !== "autoscroll") return;
     if (!data.pos || data.pos.line == null) return;
-    const box = followerEls.root;
+    // The lyrics list (.jam-view__body, sharing songsheet.js's own
+    // .songsheet__body class) is its own scroll container -- that class
+    // sets overflow-x: auto, which per spec forces overflow-y to auto too
+    // wherever the other axis isn't set, so inside #jam-view's column flex
+    // layout the body claims all the scrolling itself instead of stretching
+    // #jam-view into one. #jam-view.scrollTop stays 0 forever; scrolling
+    // the wrong element here silently did nothing.
+    const box = followerEls.body;
     const y = followerVirtualLineToScrollTop(box, data.pos.line);
     if (y != null) box.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   }

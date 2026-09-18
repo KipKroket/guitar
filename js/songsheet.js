@@ -601,6 +601,16 @@
       const synced = !state.autoscroll.forceManual && getActivePlayback();
       snapshot.mode = synced ? "timestamps" : "autoscroll";
       snapshot.pos.line = scrollTopToVirtualLine(box);
+    } else if (state.expanded && panel) {
+      // Autoscroll off doesn't mean nobody's reading -- most hosts just
+      // scroll the lyrics by hand. Report that position too, tagged as
+      // "autoscroll" (not a new mode value) since /server/src/worker.js
+      // whitelists mode to none/timestamps/autoscroll/playalong and drops
+      // anything else to "none" -- and the follower already treats
+      // "autoscroll" as "just apply pos.line", so this needs no server change.
+      const box = scrollContainer();
+      snapshot.mode = "autoscroll";
+      snapshot.pos.line = scrollTopToVirtualLine(box);
     }
     return snapshot;
   }
