@@ -203,7 +203,6 @@ body {
 }
 /* A standalone title (no back arrow beside it) has to clear the gear. */
 .page-head .page-title { margin-left: 0; }
-#page-chords .page-title { margin-left: 2.6rem; }
 
 /* ---------- Pages ---------- */
 #page-container {
@@ -572,16 +571,9 @@ select {
 .library__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 1rem;
 }
 
-.library__title {
-  font-family: var(--font-display);
-  font-size: 1.6rem;
-  font-weight: 500;
-  margin: 0 0 0 2.6rem; /* clear the floating Settings gear top-left */
-}
 
 .add-button {
   display: flex;
@@ -601,10 +593,13 @@ select {
 .add-button:active { box-shadow: none; transform: translateY(3px); }
 
 .library__actions {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  margin-left: 2.6rem; /* clear the floating Settings gear top-left */
 }
+.library__actions .add-button { margin-left: auto; }
 
 /* Segmented slider: guitar on the left, piano on the right, with a round
    thumb that slides between them on tap (click only -- it never drags). */
@@ -1042,43 +1037,17 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 
 .save-button:active { transform: translateY(1px); }
 
-/* "Still learning" marker -- sits beside the save button, only shown once a
-   song is actually saved (matches detail-favorite-btn's own hidden rule). */
-.detail-learning-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink-soft);
-  cursor: pointer;
-}
-
-.detail-learning-btn[hidden] { display: none; }
-.detail-learning-btn:active { transform: translateY(1px); }
-
-.detail-learning-btn[aria-pressed="true"] {
-  border-color: var(--ember);
-  color: var(--ember);
-  background: color-mix(in srgb, var(--ember) 14%, var(--surface));
-}
-.detail-learning-btn[aria-pressed="true"] svg path:last-child { fill: currentColor; }
-
-/* "Open in metronome" -- only shown once a tempo has been found. */
+/* "Open in metronome" -- beside the save button, only shown once a tempo has been found. */
 .detail-metro-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.9rem;
+  gap: 0.45rem;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink);
   border-radius: 999px;
-  padding: 0.55rem 1.2rem;
+  padding: 0.7rem 1rem;
   font-family: var(--font-body);
   font-weight: 500;
   font-size: 0.88rem;
@@ -1124,7 +1093,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   font-family: var(--font-display);
   font-size: 1.15rem;
   font-weight: 500;
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.7rem;
 }
 
 .song-links__sub {
@@ -1818,32 +1787,16 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   color: var(--ink-soft);
 }
 
-/* "Show all" grid -- every chord in the sheet at once, for running through
-   the whole progression before playing rather than looking one up at a
-   time (see the chip row below, which stays one-at-a-time for the swap
-   picker). Reuses the same .mini-chord__* rules as the chip card and the
-   chord book, just several at once. */
-.songsheet__chordgrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 0.7rem;
-  margin-top: 0.7rem;
-}
-.songsheet__chordgrid .mini-chord {
-  padding: 0.75rem 0.5rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  text-align: center;
-}
-.songsheet__chordgrid .mini-chord__diagram .fretboard { width: 100px; }
-.songsheet__chordgrid .mini-chord__diagram .keyboard { max-width: 100%; }
-
 .songsheet__chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 1rem;
+}
+.songsheet__chips-capo {
+  align-self: center;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
 }
 .songsheet__chip {
   flex: 0 0 auto;
@@ -2167,14 +2120,10 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 .chords__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
-}
-
-.chords__sub {
-  margin: 0.15rem 0 1.1rem 2.6rem;
-  font-size: 0.8rem;
-  color: var(--ink-soft);
+  min-height: 40px;
+  padding-top: 0.25rem;
+  margin: 0 0 1.1rem 2.6rem; /* clear the floating Settings gear top-left */
 }
 
 .chord-roots,
@@ -2449,10 +2398,14 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
+  gap: 0.4rem;
   height: 34px;
+  padding: 0 0.85rem 0 0.7rem;
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.85rem;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink-soft);

@@ -55,10 +55,8 @@
   const detailArtist = document.getElementById("detail-artist");
   const detailMeta = document.getElementById("detail-meta");
   const detailSaveBtn = document.getElementById("detail-save-btn");
-  const detailLearningBtn = document.getElementById("detail-learning-btn");
   const detailFavBtn = document.getElementById("detail-favorite-btn");
   const detailChordLinks = document.getElementById("detail-chord-links");
-  const detailChordSub = document.getElementById("chord-links-sub");
   const detailTabLinks = document.getElementById("detail-tab-links");
   const detailTabGroup = document.getElementById("tab-links-group");
   const songLinksEl = document.getElementById("song-links");
@@ -254,18 +252,6 @@
     renderLibraryList();
     if (currentDetailId === id) {
       detailFavBtn.setAttribute("aria-pressed", entry.favorite ? "true" : "false");
-    }
-  }
-
-  function toggleLearning(id) {
-    const entry = findEntry(id);
-    if (!entry) return;
-    entry.learning = !entry.learning;
-    entry.updatedAt = Date.now();
-    commit();
-    renderLibraryList();
-    if (currentDetailId === id) {
-      detailLearningBtn.setAttribute("aria-pressed", entry.learning ? "true" : "false");
     }
   }
 
@@ -644,7 +630,6 @@
     detailSaveBtn.classList.toggle("is-saved", isSaved);
     detailSaveBtn.textContent = isSaved ? "Saved · Tap to remove" : "Save to Library";
     detailFavBtn.hidden = !isSaved;
-    detailLearningBtn.hidden = !isSaved;
   }
 
   function openDetail(song, opts) {
@@ -673,11 +658,6 @@
       const linkQuery = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
       const piano = currentInstrument() === "piano";
       renderSourceButtons(detailChordLinks, CHORD_SOURCES[piano ? "piano" : "guitar"], linkQuery);
-      if (detailChordSub) {
-        detailChordSub.textContent = piano
-          ? "Lyrics with the chords written above them — for playing along on the keys."
-          : "Lyrics with the chords to play above them — for strumming and campfire play.";
-      }
       if (detailTabGroup) detailTabGroup.hidden = piano;
       if (piano) {
         detailTabLinks.innerHTML = "";
@@ -688,7 +668,6 @@
 
     updateSaveButton(saved);
     detailFavBtn.setAttribute("aria-pressed", currentDetailSong.favorite ? "true" : "false");
-    detailLearningBtn.setAttribute("aria-pressed", currentDetailSong.learning ? "true" : "false");
 
     detailOverlay.hidden = false;
     closeSearch();
@@ -778,11 +757,6 @@
   detailFavBtn.addEventListener("click", () => {
     if (!currentDetailId) return;
     toggleFavorite(currentDetailId);
-  });
-
-  detailLearningBtn.addEventListener("click", () => {
-    if (!currentDetailId) return;
-    toggleLearning(currentDetailId);
   });
 
   // Any bottom-nav tap closes a search/detail overlay if one is open --

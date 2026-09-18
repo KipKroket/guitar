@@ -21,6 +21,8 @@
   // Autoscroll tempo is a plain user preference (not per-song, not part of
   // any sheet record) so it's kept in its own tiny localStorage key.
   const SCROLL_SPEED_KEY = "guitar-autoscroll-speed";
+  // Chord chips shown before "Show all" is tapped.
+  const COLLAPSED_CHIP_COUNT = 4;
 
   // Same Cloudflare Worker as js/sync.js (SYNC_URL), plus the /song route:
   // it scrapes a chord sheet, caches it, and hands back the same "chords
@@ -245,6 +247,111 @@
     );
     const lineCount = sections.reduce((n, s) => n + s.lines.filter(Boolean).length, 0);
     return { meta, sections, chordCount, lineCount };
+  }
+
+  /* ================================================================
+     Cleaning a fetched sheet: scraped pages often wrap the actual lyrics in
+     song blurbs, wikipedia/site links, credits, strumming notes and ASCII
+     chord/tab diagrams (lines of dashes, x's and o's). None of that belongs
+     in the viewer -- the sheet should open straight on the intro. Works on
+     the raw text (before parsing) and only ever deletes lines, apart from
+     turning a plain "Capo 2" line into a {capo: 2} directive.
+     ================================================================ */
+
+  const JUNK_LINE_RES = [
+    /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|org|net|io|nl)\b/i,
+    /wikipedia/i,
+    /^\s*\(?\s*(?:tabbed|transcribed|chords?|tabs?|lyrics|arranged|submitted|written|edited|corrected|typed|tuning|album|from)\s+(?:by|from)\b/i,
+    /©|\(c\)\s*\d{4}|copyright|all rights reserved|please rate|rate this (?:tab|song|chord)/i,
+    /^\s*(?:difficulty|tuning|key|artist|album|song|title|genre|year|rating|author|written by|tempo|bpm|time signature)\s*:\s*\S.{0,60}$/i,
+    /^\s*(?:chord (?:diagrams?|chart|legend|shapes?|key|names?)|chords? (?:used|in this song|for this song)|chords?|strumming(?: pattern)?|strum(?:ming)? pattern|rhythm|legend|notes?|n\.?\s?b\.?|tips?|about|info|intro tab|fingerpicking(?: pattern)?)\s*:?\s*$/i,
+    /^\s*(?:strumming|strum(?:ming)? pattern|rhythm|pattern|tip|notes?|n\.?\s?b\.?)\s*:\s*\S/i,
+  ];
+  const CAPO_LINE_RE = /^\s*\(?\s*capo\s*:?\s*(?:on\s*)?(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:fret)?\s*\)?\s*$/i;
+
+  // ASCII tab / chord-box lines: "e|---0---|", "|--|--|", "x 0 2 2 1 0", "x02210".
+  function isDiagramLine(raw) {
+    const line = raw.trim();
+    if (!line) return false;
+    const body = line.replace(/^[A-Ga-g][#b]?\s*[|:]/, "");
+    if (
+      /^[\s\-|+=_~.:*\/\\<>()^0-9xXoOhHpPbBrRsS]+$/.test(body) &&
+      (body.match(/[-|=_]/g) || []).length >= 3
+    ) {
+      return true;
+    }
+    return /^[xXoO0-9](?:[\s-]*[xXoO0-9]){3,}$/.test(line) && /[xX0-9]/.test(line);
+  }
+
+  function isJunkLine(raw) {
+    return isDiagramLine(raw) || JUNK_LINE_RES.some((re) => re.test(raw));
+  }
+
+  // Prose: a long sentence with no chords in it (song blurb, disclaimer).
+  function isProseLine(raw) {
+    const line = raw.trim();
+    if (!line || isChordLine(raw) || /\[[^\]]+\]/.test(line)) return false;
+    return line.split(/\s+/).length >= 10 && /[.!?:]$/.test(line);
+  }
+
+  function cleanSheetText(raw) {
+    const text = String(raw || "").replace(/\r\n?/g, "\n");
+    let capo = null;
+    const hasCapoDirective = /^\s*\{\s*capo\b/im.test(text);
+    let lines = [];
+    text.split("\n").forEach((ln) => {
+      const cm = ln.match(CAPO_LINE_RE);
+      if (cm) {
+        if (capo == null && +cm[1] > 0) capo = cm[1];
+        return;
+      }
+      if (/^\s*\{[^}]*\}\s*$/.test(ln)) {
+        lines.push(ln);
+        return;
+      }
+      if (!isJunkLine(ln)) lines.push(ln);
+    });
+
+    const isDirective = (ln) => /^\s*\{[^}]*\}\s*$/.test(ln);
+    const isRealLabel = (ln) => {
+      const lab = sectionLabel(ln);
+      return lab !== null && !/^\d+$/.test(lab);
+    };
+    // First line that is unmistakably the sheet itself: a section heading,
+    // a line with inline [chords], or a chord line sitting right above a
+    // lyric line.
+    let start = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const ln = lines[i];
+      if (!ln.trim() || isDirective(ln)) continue;
+      const bracketChord = /\[[^\]]+\]/.test(ln) && sectionLabel(ln) === null && !/^\s*\[[^\]]*\]\s*$/.test(ln);
+      const next = lines[i + 1];
+      const paired =
+        isChordLine(ln) && next != null && next.trim() && !isChordLine(next) &&
+        sectionLabel(next) === null && !isDirective(next);
+      if (isRealLabel(ln) || bracketChord || paired) {
+        start = i;
+        break;
+      }
+    }
+    if (start > 0) {
+      lines = lines.filter((ln, i) => i >= start || isDirective(ln));
+    }
+
+    // Trailing disclaimers / notes.
+    while (lines.length && (!lines[lines.length - 1].trim() || isProseLine(lines[lines.length - 1]))) {
+      lines.pop();
+    }
+
+    if (capo != null && !hasCapoDirective) {
+      let at = 0;
+      while (at < lines.length && isDirective(lines[at])) at++;
+      lines.splice(at, 0, "{capo: " + capo + "}");
+    }
+
+    const out = lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\s+$/, "") + "\n";
+    // Never hand back a sheet that lost all its content.
+    return parseSheet(out).lineCount > 0 ? out : String(raw || "");
   }
 
   /* ================================================================
@@ -1215,8 +1322,40 @@
       playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
       showAllChords: false,
     };
+    migrateFetchedSheet();
     root.hidden = false;
     render();
+  }
+
+  // Sheets fetched before cleanSheetText() existed still carry their junk --
+  // clean them once on open (pasted sheets are the user's own text and are
+  // left alone). Sync timestamps follow their lines to the new positions.
+  function migrateFetchedSheet() {
+    const rec = state.record;
+    if (!rec || rec.source === "paste") return;
+    const cleaned = cleanSheetText(rec.raw);
+    if (cleaned === rec.raw) return;
+    const oldTexts = flatLyricLineTexts(rec.raw);
+    const newTexts = flatLyricLineTexts(cleaned);
+    saveSheet(state.inst, state.song.id, { raw: cleaned, source: rec.source, transpose: rec.transpose });
+    state.record = loadSheet(state.inst, state.song.id);
+    const points = getSyncPoints();
+    if (!points.length) return;
+    // Cleaning only deletes lines, so the new lines are a subsequence of the
+    // old ones: walk both lists to find where each old line ended up.
+    const oldToNew = new Map();
+    let o = 0;
+    for (let n = 0; n < newTexts.length; n++) {
+      while (o < oldTexts.length && oldTexts[o] !== newTexts[n]) o++;
+      if (o >= oldTexts.length) break;
+      oldToNew.set(o, n);
+      o++;
+    }
+    const remapped = points
+      .filter((p) => oldToNew.has(p.line))
+      .map((p) => ({ line: oldToNew.get(p.line), ms: p.ms, text: p.text }));
+    if (remapped.length >= 2) saveSyncPoints(remapped);
+    else clearLyricsSync();
   }
 
   function close() {
@@ -1489,6 +1628,7 @@
   function applyFetchedSheet(rec) {
     const songId = state.song.id;
     const oldRaw = state.record ? state.record.raw : "";
+    rec = { ...rec, raw: cleanSheetText(rec.raw) };
     saveSheet(state.inst, songId, {
       raw: rec.raw,
       source: rec.source || "fetch",
@@ -1637,23 +1777,11 @@
 
     const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
 
-    if (!state.syncMode) {
-      const chordSymsForPlayAlong = uniqueChords(shown);
-      const playBtn = el(
-        "button",
-        "songsheet__btn" + (state.playAlong.on ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
-        state.playAlong.on ? "Stop play along" : "Play along"
-      );
-      playBtn.type = "button";
-      playBtn.disabled = !chordSymsForPlayAlong.length;
-      playBtn.addEventListener("click", () => togglePlayAlong());
-      secondaryRow.appendChild(playBtn);
-    }
-
     // Only shown in sync mode, and only once there's something to clear --
     // removing points one at a time by tapping each time-badge is tedious
     // once there are more than a couple. Placed left of "Done syncing" (see
-    // below), i.e. appended first.
+    // below), i.e. appended first. Outside sync mode, Sync leads and Play
+    // along follows it.
     const activePlaybackForClear = state.syncMode ? getActivePlayback() : null;
     const clearableCount = activePlaybackForClear ? getSyncPoints().length : 0;
     if (state.syncMode && clearableCount > 0) {
@@ -1713,44 +1841,45 @@
     });
     secondaryRow.appendChild(syncBtn);
 
+    if (!state.syncMode) {
+      const chordSymsForPlayAlong = uniqueChords(shown);
+      const playBtn = el(
+        "button",
+        "songsheet__btn" + (state.playAlong.on ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
+        state.playAlong.on ? "Stop play along" : "Play along"
+      );
+      playBtn.type = "button";
+      playBtn.disabled = !chordSymsForPlayAlong.length;
+      playBtn.addEventListener("click", () => togglePlayAlong());
+      secondaryRow.appendChild(playBtn);
+    }
+
     bar.appendChild(secondaryRow);
     panel.appendChild(bar);
 
-    if (model.meta.capo) {
-      panel.appendChild(el("p", "songsheet__meta", "Capo " + model.meta.capo));
-    }
-
     /* ---- chord chips + a slot for the tapped chord's diagram ---- */
     const chordSyms = uniqueChords(shown);
+    if (model.meta.capo && !chordSyms.length) {
+      panel.appendChild(el("p", "songsheet__meta", "Capo " + model.meta.capo));
+    }
     if (chordSyms.length) {
       const chipsHead = el("div", "songsheet__chipshead");
       chipsHead.appendChild(el("span", "songsheet__chipshead-label", "Chords"));
-      const allBtn = el("button", "songsheet__btn songsheet__btn--sm", state.showAllChords ? "Hide all" : "Show all");
-      allBtn.type = "button";
-      allBtn.addEventListener("click", () => {
-        state.showAllChords = !state.showAllChords;
-        render();
-      });
-      chipsHead.appendChild(allBtn);
+      // Only the first few chords are chips by default; "Show all" reveals
+      // the rest (and hides the capo note that sits beside the short list).
+      if (chordSyms.length > COLLAPSED_CHIP_COUNT) {
+        const allBtn = el("button", "songsheet__btn songsheet__btn--sm", state.showAllChords ? "Show less" : "Show all");
+        allBtn.type = "button";
+        allBtn.addEventListener("click", () => {
+          state.showAllChords = !state.showAllChords;
+          render();
+        });
+        chipsHead.appendChild(allBtn);
+      }
       panel.appendChild(chipsHead);
     }
 
-    // "Show all" replaces the one-at-a-time chip+card interaction below with
-    // every chord's diagram laid out at once -- meant for glancing over the
-    // whole progression before playing it, not for the swap picker (that
-    // stays chip-only, one chord at a time).
-    if (chordSyms.length && state.showAllChords) {
-      const grid = el("div", "songsheet__chordgrid");
-      chordSyms.forEach((sym) => {
-        const card = el("div", "mini-chord");
-        grid.appendChild(card);
-        const ok = window.GuitarChords && window.GuitarChords.renderInto
-          ? window.GuitarChords.renderInto(card, sym)
-          : false;
-        if (!ok && !card.textContent) card.textContent = sym;
-      });
-      panel.appendChild(grid);
-    } else if (chordSyms.length) {
+    if (chordSyms.length) {
       const chips = el("div", "songsheet__chips");
       const card = el("div", "songsheet__chipcard");
       card.hidden = true;
@@ -1807,7 +1936,8 @@
         }
       }
 
-      chordSyms.forEach((sym) => {
+      const visibleSyms = state.showAllChords ? chordSyms : chordSyms.slice(0, COLLAPSED_CHIP_COUNT);
+      visibleSyms.forEach((sym) => {
         const chip = el("button", "songsheet__chip", sym);
         chip.type = "button";
         chip.addEventListener("click", () => {
@@ -1828,6 +1958,9 @@
         });
         chips.appendChild(chip);
       });
+      if (model.meta.capo && !state.showAllChords) {
+        chips.appendChild(el("span", "songsheet__chips-capo", "– Capo " + model.meta.capo));
+      }
       panel.appendChild(chips);
       panel.appendChild(card);
     }

@@ -404,7 +404,6 @@
   const diagramEl = document.getElementById("chord-diagram");
   const notesEl = document.getElementById("chord-notes");
   const hintEl = document.getElementById("chord-shape-hint");
-  const subEl = document.getElementById("chords-sub");
   if (!rootsEl || !typesEl) return;
 
   let rootIdx = clampRoot(localStorage.getItem("guitar-chord-root"));
@@ -458,9 +457,6 @@
 
     nameEl.textContent = NOTES[rootIdx] + quality.suffix;
     notesEl.textContent = quality.intervals.map((iv) => NOTES[(rootIdx + iv) % 12]).join("  ·  ");
-    if (subEl) subEl.textContent = piano
-      ? "Which keys to press — root note highlighted."
-      : "Low string on the left · ✕ muted · ○ open.";
 
     if (piano) {
       diagramEl.innerHTML = renderKeyboard(rootIdx, quality.intervals);
