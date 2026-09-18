@@ -1,36 +1,33 @@
-// Guitar — chord-detection engine for the songsheet "Play along" mode
-// (js/songsheet.js). Listens to the mic and works out which of a *small*
-// known set of chords -- the ones in this song's own progression -- is
-// most likely sounding right now, then drives a step pointer through
-// that progression.
+// Guitar — chord-CHANGE-detection engine for the songsheet "Play along" mode
+// (js/songsheet.js). Doesn't try to recognise which chord is sounding at
+// all -- it just listens for the live sound becoming meaningfully
+// different from whatever was sounding a moment ago, and advances the step
+// pointer through the song's own progression on that signal alone,
+// regardless of which chords are actually being played.
 //
-// Deliberately not a general "name any chord" recogniser: scoring the
-// live sound against only the handful of chords a song actually uses
-// (rather than all 12 roots x every quality) is what keeps a phone mic
-// plus a plain FFT chroma vector usable at all -- fewer, more different-
-// sounding candidates to tell apart.
+// This replaced an earlier version that scored the live sound against the
+// specific chord expected next (cosine similarity against a small set of
+// chord-tone templates). That worked in principle but missed often in
+// practice -- a phone mic plus a plain FFT chroma vector isn't reliable
+// enough at telling two *specific* chords apart. "Did the sound change at
+// all" is a much easier question, and it's all the pointer actually needs:
+// the song's own chord list already says what comes next, so all that's
+// missing is *when* to move on.
 //
-// Matching is a small state machine, not "closest chord wins each tick":
-// PlayAlongDetector only ever compares the live sound against the
-// *current* step (to recognise "no change yet") and a short lookahead
-// window of the next couple of steps, and only advances once the same
-// candidate has read consistently for DWELL_MS. That means a chord that's
-// barely audible (weak strum, buzzed string, drowned out) still lets the
-// pointer catch up as soon as a later chord in the window reads clearly,
-// instead of getting stuck forever waiting for a transition that will
-// never register cleanly.
-//
-// MATCH_THRESHOLD / DWELL_MS / STEP_LOOKAHEAD / NOISE_FLOOR below are
-// first-pass guesses -- there's no real guitar+mic audio to tune them
-// against in this environment, so expect them to need adjusting once
-// actually tried.
+// The one thing this approach has to guard against: a strum's pick attack
+// always looks "different" from whatever was sustaining a moment before,
+// even when it's the *same* chord being re-strummed. So "different" is
+// never decided from a single reading -- a candidate has to read
+// consistently different from the settled baseline for DWELL_MS before
+// it's accepted as a real change, which is long enough for a pick attack's
+// transient to have decayed into the new sustain (or, on a same-chord
+// restrum, back into essentially the old one) either way.
 (function () {
   const MIN_HZ = 70; // just under open low E (~82Hz), with headroom
   const MAX_HZ = 1300; // a couple of guitar-range harmonics; cuts off hiss
-  const MATCH_THRESHOLD = 0.55; // cosine similarity needed to accept a candidate
+  const CHANGE_THRESHOLD = 0.5; // cosine similarity BELOW this = "different from the baseline"
   const NOISE_FLOOR = 0.02; // this tick's total chroma energy below this = "not playing"
-  const DWELL_MS = 220; // how long a candidate must read before it counts
-  const STEP_LOOKAHEAD = 2; // how far ahead in the progression to listen for
+  const DWELL_MS = 200; // how long a candidate must read consistently different before it counts
   const TICK_MS = 120; // analysis cadence, throttled inside the rAF loop
   const SMOOTH = 0.5; // chroma exponential-smoothing factor (0 = none)
 
@@ -40,20 +37,6 @@
     const len = Math.sqrt(sum);
     if (len < 1e-9) return vec.map(() => 0);
     return vec.map((v) => v / len);
-  }
-
-  // A binary chord-tone template over the 12 pitch classes (root weighted
-  // a bit heavier -- it's usually the loudest, lowest note in a strummed
-  // chord). Reuses js/chords.js's own symbol parser rather than
-  // re-deriving root/quality here.
-  function template(sym) {
-    const vec = new Array(12).fill(0);
-    const pcs = window.GuitarChords && window.GuitarChords.pitchClasses ? window.GuitarChords.pitchClasses(sym) : null;
-    if (!pcs || !pcs.length) return vec;
-    pcs.forEach((pc, i) => {
-      vec[pc] = i === 0 ? 1.3 : 1;
-    });
-    return normalise(vec);
   }
 
   function cosine(a, b) {
@@ -66,6 +49,11 @@
   // collapse into one step -- matches js/songsheet.js's buildChordSteps(),
   // so the two stay index-for-index in sync. Idempotent, so it's harmless
   // if the caller already collapsed its own list before handing it over.
+  // Still needed here even though this detector no longer looks at chord
+  // *symbols* at all: without it, two consecutive identical-chord steps
+  // would be unreachable -- nothing about the actual sound changes between
+  // them, so a "does the sound differ" detector could never tell the song
+  // moved on to the second one.
   function collapseSteps(syms) {
     const out = [];
     syms.forEach((sym) => {
@@ -78,9 +66,14 @@
   class PlayAlongDetector {
     constructor(syms) {
       this.steps = collapseSteps(syms || []);
-      this.templates = new Map();
       this.index = 0;
-      this.candidateSym = null;
+      // The settled sound to compare new readings against -- null until
+      // the first real (non-silent) reading establishes one.
+      this.baseline = null;
+      // A reading that currently looks different from the baseline, and
+      // since when -- only promoted to the new baseline (and an advance)
+      // once it's held for DWELL_MS straight.
+      this.candidateVec = null;
       this.candidateSince = 0;
       this.chroma = new Array(12).fill(0);
       this.listening = false;
@@ -97,63 +90,39 @@
     }
 
     // Manual override (tapping a lyric line in songsheet.js) -- jump the
-    // pointer and drop whatever partial candidate match was building up,
-    // so a stray reading right after the tap can't immediately undo it.
+    // pointer and drop the baseline, so whatever's sounding right after the
+    // tap is learned fresh instead of being compared to (and likely read as
+    // "different" from) whatever was playing before the jump.
     jumpTo(index) {
       this.index = Math.max(0, Math.min(this.steps.length - 1, index));
-      this.candidateSym = null;
+      this.baseline = null;
+      this.candidateVec = null;
     }
 
-    _templateFor(sym) {
-      let t = this.templates.get(sym);
-      if (!t) {
-        t = template(sym);
-        this.templates.set(sym, t);
-      }
-      return t;
-    }
-
-    // Scores the live chroma vector against only the chords worth
-    // listening for right now: the current step (so "still on this
-    // chord" can win and nothing advances) plus a short lookahead window.
-    _bestCandidate() {
-      // this.chroma holds raw smoothed energy, not a unit vector -- has to be
-      // normalised here (matching template()'s own normalise() call) or the
-      // "cosine" below is really just a dot product that scales with how
-      // loud the strum was, so it almost never clears MATCH_THRESHOLD and
-      // the detector reads as "not listening" no matter what's played.
-      const liveVec = normalise(this.chroma);
-      let best = null;
-      let bestScore = MATCH_THRESHOLD;
-      for (let k = 0; k <= STEP_LOOKAHEAD; k++) {
-        const sym = this.steps[this.index + k];
-        if (sym == null) break;
-        const score = cosine(liveVec, this._templateFor(sym));
-        if (score > bestScore) {
-          bestScore = score;
-          best = { sym, offset: k };
-        }
-      }
-      return best;
-    }
-
-    _feed(now) {
-      const best = this._bestCandidate();
-      if (!best || best.offset === 0) {
-        // Either nothing cleared the threshold, or the clearest match is
-        // just "still on the current chord" -- neither advances anything.
-        this.candidateSym = null;
+    _feed(now, liveVec) {
+      if (!this.baseline) {
+        this.baseline = liveVec;
+        this.candidateVec = null;
         return;
       }
-      if (this.candidateSym === best.sym) {
-        if (now - this.candidateSince >= DWELL_MS) {
-          this.index += best.offset;
-          this.candidateSym = null;
+      const similarity = cosine(liveVec, this.baseline);
+      if (similarity >= CHANGE_THRESHOLD) {
+        // Still reads as the same sound as the baseline -- nothing brewing.
+        this.candidateVec = null;
+        return;
+      }
+      if (!this.candidateVec) {
+        this.candidateVec = liveVec;
+        this.candidateSince = now;
+        return;
+      }
+      if (now - this.candidateSince >= DWELL_MS) {
+        this.baseline = liveVec;
+        this.candidateVec = null;
+        if (this.index < this.steps.length - 1) {
+          this.index += 1;
           if (this.onStep) this.onStep(this.index);
         }
-      } else {
-        this.candidateSym = best.sym;
-        this.candidateSince = now;
       }
     }
 
@@ -217,8 +186,12 @@
       }
       for (let i = 0; i < 12; i++) this.chroma[i] = this.chroma[i] * SMOOTH + raw[i] * (1 - SMOOTH);
       const energy = raw.reduce((a, b) => a + b, 0);
-      if (energy < NOISE_FLOOR) return; // nobody's playing right now
-      this._feed(now);
+      // Nobody's playing right now -- leave the baseline and any candidate
+      // alone rather than feeding silence in as "different", so a pause
+      // between chords doesn't itself register as a change once playing
+      // resumes.
+      if (energy < NOISE_FLOOR) return;
+      this._feed(now, normalise(this.chroma));
     }
 
     stop() {

@@ -26,6 +26,24 @@ cache.
    → JSON with a `raw` chord sheet (or `{"error":...,"tried":[...]}` if both
    sources were blocked — then the app falls back to the paste box).
 
+## Shipping the jam "mark line" update to the live Worker
+
+Adds a `mark_line`/`mark_ts` pair to `jam_sessions` so a host can briefly
+flash a line for every follower (tap the empty space right of the line's
+text). `CREATE TABLE IF NOT EXISTS` can't add columns to a table that
+already exists, so this one needs an explicit `ALTER TABLE` against the
+live database (harmless to skip on a from-scratch install — there,
+`schema.sql`'s `CREATE TABLE` already includes both columns).
+
+1. **Schema:** Cloudflare dashboard → **D1** → `guitar-sync` → **Console**,
+   paste and run:
+   ```sql
+   ALTER TABLE jam_sessions ADD COLUMN mark_line INTEGER;
+   ALTER TABLE jam_sessions ADD COLUMN mark_ts INTEGER;
+   ```
+2. **Code:** Workers & Pages → `guitar-sync` → **Edit code** → replace with
+   `src/worker.js` → **Deploy**.
+
 ## Already deployed (2026-09-03)
 
 - Worker: **https://guitar-sync.julianleendertse.workers.dev** (this is the

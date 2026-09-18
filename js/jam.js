@@ -35,22 +35,34 @@
   let followerShown = null; // transposeModel() result for the currently rendered sheet
   let followerSteps = null; // buildChordSteps() result for the currently rendered sheet
   let followerChordEls = null; // "lineIdx:order" -> chord element, for incremental play-along highlighting
+  let followerLastMarkTs = null; // last poll's data.mark.ts already flashed, so the same mark doesn't replay every poll
   let followerLastData = null; // most recent /poll response, reapplied after an instrument-toggle rebuild
   // Continuous scroll-follow: the host only reports its position once a
   // poll (~1s), which used to mean applyFollowerScroll() drove one
   // .scrollTo({behavior:"smooth"}) per poll -- each one starts and stops
   // its own short animation, so motion visibly stepped once a second
-  // instead of gliding. Now a poll only updates followerTargetLine; a
-  // standing rAF loop (followerScrollFrame) eases followerRenderedLine
-  // toward it every frame, so the visible position moves continuously
-  // between polls too, at whatever rate keeps it caught up.
+  // instead of gliding. A first fix eased followerRenderedLine toward the
+  // latest poll's target every frame -- smoother, but still visibly
+  // stop-start: the ease reaches a poll's (already-stale) target well
+  // inside one poll interval, then sits still until the next poll moves
+  // the target again. Now applyFollowerScroll() also estimates the host's
+  // *speed* (lines/sec) from how far the target moved since the previous
+  // poll, and followerScrollFrame() keeps extrapolating forward at that
+  // speed every frame -- a dead-reckoning glide that doesn't stall between
+  // polls -- while a slow correction term nudges it back onto the actual
+  // reported target in case the estimate drifts.
   let followerScrollRAF = null;
   let followerScrollLastTs = null;
   let followerTargetLine = null;
+  let followerTargetTs = null; // performance.now() timestamp the target line was last set
   let followerRenderedLine = null;
-  // Whether the host is currently reporting ANY scroll position (autoscroll
-  // running, or just scrolled by hand -- see songsheet.js getJamSnapshot())
-  // -- drives the scroll-follow FAB's colour independent of autoFollow.
+  let followerVelocity = 0; // estimated host scroll speed, in lines/sec
+  const FOLLOWER_MAX_VELOCITY = 8; // lines/sec clamp -- guards against a noisy poll spiking the estimate
+  // Whether the host's autoscroll is currently on (see songsheet.js
+  // getJamSnapshot() -- it only reports a position while autoscroll.on is
+  // true, manual scrolling underneath doesn't count) -- drives the
+  // scroll-follow FAB's colour independent of autoFollow, and turns on/off
+  // in lockstep with the host's own autoscroll toggle.
   let followerScrollActive = false;
   // Which instrument's diagrams a follower sees for chord chips/popovers --
   // independent of the host's own instrument and of this follower's own app
@@ -162,6 +174,19 @@
       // hammering a dead session every tick. Any other error is presumed
       // transient (offline, Worker hiccup) and just retried next tick.
       if (err.status === 403 || err.status === 404) stopJamLocal();
+    }
+  }
+
+  // Fired straight from js/songsheet.js's markLine() -- fires its own
+  // /update right away rather than waiting for the next hostTick (up to
+  // HOST_TICK_MS later), since a quick "look here" pulse loses its point
+  // if it lands a beat late. No-ops if this device isn't actually hosting.
+  async function hostMarkLine(idx) {
+    if (!session || session.role !== "host" || !Number.isFinite(idx)) return;
+    try {
+      await api("/update", { code: session.code, hostToken: session.hostToken, mark: { line: idx } });
+    } catch (err) {
+      /* best effort -- a missed mark isn't worth retrying or surfacing */
     }
   }
 
@@ -390,13 +415,16 @@
     followerShown = null;
     followerSteps = null;
     followerChordEls = null;
+    followerLastMarkTs = null;
     if (followerScrollRAF != null) {
       cancelAnimationFrame(followerScrollRAF);
       followerScrollRAF = null;
     }
     followerScrollLastTs = null;
     followerTargetLine = null;
+    followerTargetTs = null;
     followerRenderedLine = null;
+    followerVelocity = 0;
     followerScrollActive = false;
   }
 
@@ -449,11 +477,28 @@
       // A new song/sheet renumbers every line -- the last song's target/
       // rendered position means nothing here, so don't glide in from it.
       followerTargetLine = null;
+      followerTargetTs = null;
       followerRenderedLine = null;
+      followerVelocity = 0;
+      followerLastMarkTs = null;
     }
 
     applyFollowerHighlight(data);
     applyFollowerScroll(data);
+    applyFollowerMark(data);
+  }
+
+  // Replays the host's line-mark pulse (js/songsheet.js flashLine(), see
+  // markLine()/hostMarkLine()) on this follower's own copy of the line.
+  // data.mark is only present while fresh (worker.js's JAM_MARK_STALE_MS),
+  // and ts is stamped server-side, so this needs no clock-skew handling --
+  // dedupe purely on "is this the same mark we already flashed".
+  function applyFollowerMark(data) {
+    const mark = data.mark;
+    if (!mark || mark.ts == null || mark.ts === followerLastMarkTs) return;
+    followerLastMarkTs = mark.ts;
+    const SS = window.GuitarSongSheet;
+    if (SS && SS.flashLine && followerEls) SS.flashLine(followerEls.body, mark.line);
   }
 
   function renderFollowerChips(SS, shown) {
@@ -568,29 +613,49 @@
 
   // Records what the latest poll says the host is doing -- the actual
   // scrolling happens continuously in followerScrollFrame() below, not
-  // here, so a poll landing doesn't itself cause a visible step.
+  // here, so a poll landing doesn't itself cause a visible step. Also
+  // estimates the host's scroll *speed* from how far the target moved since
+  // the previous poll, so followerScrollFrame() can keep gliding forward
+  // between polls instead of sitting still once it catches up to a stale
+  // target (see the comment above followerScrollRAF's declaration).
   function applyFollowerScroll(data) {
     const active = data.mode === "timestamps" || data.mode === "autoscroll";
     followerScrollActive = active;
     updateScrollFabUI();
-    if (!active || !data.pos || data.pos.line == null) return;
-    followerTargetLine = data.pos.line;
+    if (!active || !data.pos || data.pos.line == null) {
+      followerVelocity = 0;
+      return;
+    }
+    const now = performance.now();
+    const newTarget = data.pos.line;
     // First sample for this song, or a big jump (host opened a different
     // part of a long sheet, or a seek) -- snap instead of gliding across
-    // the whole visible sheet over the next second.
-    if (followerRenderedLine == null || Math.abs(followerTargetLine - followerRenderedLine) > 8) {
-      followerRenderedLine = followerTargetLine;
+    // the whole visible sheet over the next second, and don't derive a
+    // velocity from a jump that was never real continuous motion.
+    if (followerRenderedLine == null || Math.abs(newTarget - followerRenderedLine) > 8) {
+      followerRenderedLine = newTarget;
+      followerVelocity = 0;
+    } else if (followerTargetTs != null) {
+      const dt = (now - followerTargetTs) / 1000;
+      if (dt > 0.05) {
+        const v = (newTarget - followerTargetLine) / dt;
+        followerVelocity = Math.max(-FOLLOWER_MAX_VELOCITY, Math.min(FOLLOWER_MAX_VELOCITY, v));
+      }
     }
+    followerTargetLine = newTarget;
+    followerTargetTs = now;
   }
 
   // Runs continuously (not just once per poll) while the follower view
-  // exists, easing followerRenderedLine toward whatever followerTargetLine
-  // the last poll set. This is what actually turns "a new number every
-  // ~1s" into a smooth glide: .scrollTo({behavior:"smooth"}) used to be
-  // called fresh on every poll, so each one started and stopped its own
-  // short animation -- visible as a once-a-second step rather than
-  // continuous motion. autoFollow (this follower's own pause) gates it the
-  // same way it always has.
+  // exists. A poll only lands once a second, which isn't often enough to
+  // itself drive smooth motion -- gliding at followerVelocity (the host's
+  // estimated lines/sec, see applyFollowerScroll) is what keeps the view
+  // moving in between polls instead of reaching a poll's target and
+  // visibly stalling until the next one arrives. A slow correction term
+  // then nudges followerRenderedLine back onto the actual reported
+  // followerTargetLine, so an imperfect speed estimate can't drift the
+  // view away from where the host really is. autoFollow (this follower's
+  // own pause) gates it the same way it always has.
   function followerScrollFrame(ts) {
     followerScrollRAF = requestAnimationFrame(followerScrollFrame);
     if (!followerEls || followerEls.body.hidden || !autoFollow || followerTargetLine == null || followerRenderedLine == null) {
@@ -599,12 +664,15 @@
     }
     const dt = followerScrollLastTs != null ? (ts - followerScrollLastTs) / 1000 : 0;
     followerScrollLastTs = ts;
-    // Exponential ease -- tau picked so it's most of the way to a fresh
-    // target well within one poll interval, without overshoot if the host
-    // pauses right after a jump.
-    const tau = 0.4;
-    const k = dt > 0 ? 1 - Math.exp(-dt / tau) : 0;
-    followerRenderedLine += (followerTargetLine - followerRenderedLine) * k;
+    if (dt > 0) {
+      followerRenderedLine += followerVelocity * dt;
+      // Correction tau is deliberately slower than the old ease-only
+      // approach (0.4s) -- the velocity term above already does most of
+      // the work of tracking the host, this just keeps it honest.
+      const correctionTau = 0.8;
+      const k = 1 - Math.exp(-dt / correctionTau);
+      followerRenderedLine += (followerTargetLine - followerRenderedLine) * k;
+    }
     const box = followerEls.body;
     const y = followerVirtualLineToScrollTop(box, followerRenderedLine);
     if (y != null) box.scrollTop = Math.max(0, Math.round(y));
@@ -819,5 +887,5 @@
 
   boot();
 
-  window.GuitarJam = { startJam, stopJam, joinJam, leaveJam };
+  window.GuitarJam = { startJam, stopJam, joinJam, leaveJam, hostMarkLine };
 })();

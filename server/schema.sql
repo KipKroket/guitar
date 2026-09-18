@@ -92,7 +92,20 @@ CREATE TABLE IF NOT EXISTS jam_sessions (
   pos_line        REAL,               -- timestamps/autoscroll modes: fractional line index (see js/songsheet.js getJamSnapshot)
   pos_index       INTEGER,            -- playalong mode: current chord-step index (see js/songsheet.js buildChordSteps)
   created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL    -- bumped on every host call; long-stale = treated as ended
+  updated_at      INTEGER NOT NULL,   -- bumped on every host call; long-stale = treated as ended
+  -- The host briefly "marking" a line (tap the empty space right of its
+  -- text, js/songsheet.js flashLine) to point at it -- independent of
+  -- mode/pos above, which describe where the host is *scrolled to*, not a
+  -- one-off attention pulse. mark_ts is stamped by the Worker (not trusted
+  -- from the client) so followers can compare it against their own clock
+  -- without caring about the host device's clock skew; a follower ignores
+  -- it once it's not fresh enough to still be worth flashing (see
+  -- MARK_STALE_MS in worker.js) and dedupes on mark_ts actually changing.
+  -- NOTE for the already-deployed database: CREATE TABLE IF NOT EXISTS
+  -- won't add these two columns to the existing table -- see server/README.md
+  -- for the one-time ALTER TABLE to run against it.
+  mark_line       INTEGER,
+  mark_ts         INTEGER
 );
 
 -- One row per connected follower, so the host can show a headcount without

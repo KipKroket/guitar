@@ -8,8 +8,8 @@
 //   /song      { artist, title }             -> { candidates: [...] }   429 / 502
 //              { url }                       -> { raw, meta, source, url }   429 / 502
 //   /jam/create { song, sheet }               -> { code, hostToken }    400 / 429
-//   /jam/update { code, hostToken, song?, sheet?, mode?, pos? } -> { ok, participantCount }  403 / 404
-//   /jam/poll   { code, followerId }          -> { ok, song, sheet, mode, pos, participantCount }  404
+//   /jam/update { code, hostToken, song?, sheet?, mode?, pos?, mark? } -> { ok, participantCount }  403 / 404
+//   /jam/poll   { code, followerId }          -> { ok, song, sheet, mode, pos, mark, participantCount }  404
 //   /jam/end    { code, hostToken }           -> { ok: true }           403 / 404
 //
 // "libraries" is { guitar: {songs,tombstones}, piano: {songs,tombstones} }.
@@ -52,6 +52,7 @@ const JAM_CREATE_MAX = 20; // /jam/create attempts...
 const JAM_CREATE_WINDOW_MS = 60 * 60 * 1000; // ...per client IP per hour
 const JAM_STALE_MS = 45 * 1000; // no host update in this long -> followers treat it as ended
 const JAM_PRESENCE_TTL_MS = 8 * 1000; // a follower who hasn't polled in this long doesn't count
+const JAM_MARK_STALE_MS = 6 * 1000; // a "line mark" older than this is never worth flashing to a newly-polling follower
 
 export default {
   async fetch(request, env) {
@@ -436,6 +437,14 @@ async function jamUpdate(env, body) {
       Number.isFinite(pos.index) ? pos.index : null
     );
   }
+  // mark_ts is stamped here, not taken from the client, so a follower can
+  // compare it against its own Date.now() without the host device's clock
+  // being involved at all (see jam_sessions comment in schema.sql).
+  const mark = body.mark;
+  if (mark && typeof mark === "object" && Number.isFinite(mark.line)) {
+    sets.push("mark_line = ?", "mark_ts = ?");
+    vals.push(mark.line, Date.now());
+  }
   vals.push(code);
   await env.DB.prepare(`UPDATE jam_sessions SET ${sets.join(", ")} WHERE code = ?`).bind(...vals).run();
 
@@ -462,12 +471,14 @@ async function jamPoll(env, body) {
       .run();
   }
 
+  const markFresh = row.mark_ts != null && Date.now() - row.mark_ts < JAM_MARK_STALE_MS;
   return json({
     ok: true,
     song: { title: row.song_title, artist: row.song_artist, art: row.song_art },
     sheet: { raw: row.sheet_raw, transpose: row.sheet_transpose },
     mode: row.mode,
     pos: { line: row.pos_line, index: row.pos_index },
+    mark: markFresh ? { line: row.mark_line, ts: row.mark_ts } : null,
     participantCount: await jamParticipantCount(env, code),
     updatedAt: row.updated_at,
   });

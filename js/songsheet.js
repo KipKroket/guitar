@@ -573,6 +573,50 @@
     return best;
   }
 
+  // "Mark" a line -- clicking the empty space to the right of a line's own
+  // text (not the lyric/chords themselves, see the click handler in
+  // renderSheet below) gives it a brief glow: a quick way to point at one
+  // line without interrupting playing to say which. Purely a visual pulse,
+  // not part of `state` and not re-applied on the next render.
+  //
+  // flashLine() is the shared, DOM-only half: js/jam.js reuses it to
+  // replay the same glow on a follower's own rendered copy of the sheet
+  // (a completely separate DOM tree, hence `container` rather than
+  // reaching for `panel` here). MARK_FADE_MS must match the
+  // .ss-line--mark-fade transition duration in css/style.css.
+  const MARK_HOLD_MS = 1400; // full brightness before the fade starts
+  const MARK_FADE_MS = 700;
+
+  function flashLine(container, idx) {
+    const lineEl = container && container.querySelector('[data-line-idx="' + idx + '"]');
+    if (!lineEl) return;
+    if (lineEl._markHoldTimer) clearTimeout(lineEl._markHoldTimer);
+    if (lineEl._markFadeTimer) clearTimeout(lineEl._markFadeTimer);
+    // Drop the fade-transition class before (re-)adding --marked so the
+    // jump to full brightness is instant even on a re-mark mid-fade, not
+    // eased in from wherever the previous fade had gotten to.
+    lineEl.classList.remove("ss-line--mark-fade");
+    lineEl.classList.add("ss-line--marked");
+    void lineEl.offsetWidth; // force the class removal above to land before the next change
+    lineEl.classList.add("ss-line--mark-fade");
+    lineEl._markHoldTimer = setTimeout(() => {
+      lineEl._markHoldTimer = null;
+      lineEl.classList.remove("ss-line--marked");
+      lineEl._markFadeTimer = setTimeout(() => {
+        lineEl._markFadeTimer = null;
+        lineEl.classList.remove("ss-line--mark-fade");
+      }, MARK_FADE_MS);
+    }, MARK_HOLD_MS);
+  }
+
+  // Host-side trigger: flash it locally right away, and hand it to
+  // js/jam.js (if it exists and a jam is actually being hosted -- it no-ops
+  // otherwise) so every follower's screen flashes the same line too.
+  function markLine(idx) {
+    flashLine(panel, idx);
+    if (window.GuitarJam && window.GuitarJam.hostMarkLine) window.GuitarJam.hostMarkLine(idx);
+  }
+
   // A snapshot of "what the host is currently looking at", polled by
   // js/jam.js roughly once a second while hosting a jam -- null when
   // there's no open sheet with lyrics to follow. pos.line is a fractional
@@ -601,17 +645,13 @@
       const synced = !state.autoscroll.forceManual && getActivePlayback();
       snapshot.mode = synced ? "timestamps" : "autoscroll";
       snapshot.pos.line = scrollTopToVirtualLine(box);
-    } else if (state.expanded && panel) {
-      // Autoscroll off doesn't mean nobody's reading -- most hosts just
-      // scroll the lyrics by hand. Report that position too, tagged as
-      // "autoscroll" (not a new mode value) since /server/src/worker.js
-      // whitelists mode to none/timestamps/autoscroll/playalong and drops
-      // anything else to "none" -- and the follower already treats
-      // "autoscroll" as "just apply pos.line", so this needs no server change.
-      const box = scrollContainer();
-      snapshot.mode = "autoscroll";
-      snapshot.pos.line = scrollTopToVirtualLine(box);
     }
+    // Deliberately NOT reporting a position when autoscroll is off, even
+    // though the host may well be scrolling by hand -- a follower's own
+    // scroll-follow toggle is meant to track the host's autoscroll on/off
+    // state one-to-one (js/jam.js applyFollowerScroll), so it should go
+    // dark the instant the host stops autoscroll, not stay lit because of
+    // manual scrolling underneath.
     return snapshot;
   }
 
@@ -1864,6 +1904,17 @@
             lineEl.appendChild(badge);
           }
         }
+        if (!state.syncMode && !state.playAlong.on) {
+          // Only the empty space right of the line's own content counts --
+          // e.target is the wrap itself there, never one of its .ss-seg
+          // children (chord taps already stopPropagation(), and a lyric
+          // click bubbling up would still be the ss-seg__lyric span, not
+          // lineEl) -- so this can't fire from tapping the actual text.
+          lineEl.addEventListener("click", (e) => {
+            if (e.target !== lineEl) return;
+            markLine(idx);
+          });
+        }
         sec.appendChild(lineEl);
       });
       body.appendChild(sec);
@@ -2164,5 +2215,6 @@
     renderLine,
     buildChordSteps,
     uniqueChords,
+    flashLine,
   };
 })();

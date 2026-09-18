@@ -19,6 +19,19 @@
 
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "Work Sans", -apple-system, sans-serif;
+
+  /* The whole app is one centred column capped at phone width -- on an
+     iPad (or any wider viewport) that leaves large empty margins either
+     side, so it reads as a phone app that never grew into the screen.
+     Widened below at tablet-and-up; still one column, just bigger, not a
+     layout redesign. Referenced by both .app and .overlay so the main
+     pages and the full-screen overlays (library, song detail, settings,
+     chord book) stay the same width as each other at every size. */
+  --shell-max-w: 480px;
+}
+
+@media (min-width: 700px) {
+  :root { --shell-max-w: min(92vw, 900px); }
 }
 
 [data-theme="dark"] {
@@ -108,6 +121,14 @@ body[data-theme="dark"] .jam-view[data-instrument="piano"] {
 
 html, body {
   height: 100%;
+  /* Zoom is never useful in this app, and rapid taps close together (or an
+     accidental two-finger touch) can trigger the browser's own pinch/
+     double-tap zoom -- pan-x/pan-y still allows normal scrolling, it just
+     drops the zoom gestures. Belt-and-suspenders with the viewport meta's
+     user-scalable=no and the gesturestart/gesturechange guard in
+     index.html, since iOS Safari's handling of each varies by version and
+     by whether this is running standalone (added to the home screen). */
+  touch-action: pan-x pan-y;
 }
 
 body {
@@ -133,7 +154,7 @@ body {
      position:fixed;inset:0 came up short and left the nav floating above
      the edge. */
   height: 100%;
-  max-width: 480px;
+  max-width: var(--shell-max-w);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -876,7 +897,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   background: var(--bg);
   display: flex;
   flex-direction: column;
-  max-width: 480px;
+  max-width: var(--shell-max-w);
   margin: 0 auto;
   padding: max(1rem, env(safe-area-inset-top)) 1.25rem 1.5rem;
   overflow-y: auto;
@@ -1909,6 +1930,23 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   margin-left: -0.3rem;
 }
 .ss-line--syncable:active { background: color-mix(in srgb, var(--good) 20%, transparent); }
+
+/* The host "marking" a line -- js/songsheet.js flashLine(), also replayed
+   on every jam follower's own copy of the line via js/jam.js. --marked
+   itself carries no transition (added first, alone) so the jump to full
+   brightness reads as an instant pulse; --mark-fade is added right after
+   to arm the transition for the *next* change (removing --marked), which
+   is what makes the fade-out smooth. MARK_FADE_MS in songsheet.js must
+   match the duration below. */
+.ss-line--marked {
+  /* No padding/margin change here (unlike .ss-line--syncmode) -- this
+     class toggles on/off during normal viewing, and shifting the box
+     model would visibly nudge neighbouring lines instead of just
+     highlighting this one. */
+  background: color-mix(in srgb, var(--amber) 40%, transparent);
+  border-radius: 6px;
+}
+.ss-line--mark-fade { transition: background-color 0.7s ease; }
 .ss-line__synctime {
   align-self: center;
   margin-left: 0.6rem;
