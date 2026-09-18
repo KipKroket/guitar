@@ -90,7 +90,10 @@
   function readSetlists() {
     try {
       const parsed = JSON.parse(localStorage.getItem(storageKey()) || "[]");
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((s) => s && typeof s === "object" && s.id != null)
+        .map((s) => ({ ...s, name: typeof s.name === "string" ? s.name : "Untitled", songIds: Array.isArray(s.songIds) ? s.songIds : [] }));
     } catch (e) {
       return [];
     }

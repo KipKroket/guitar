@@ -103,13 +103,22 @@
     }
   }
   function writeList(key, list) {
-    localStorage.setItem(key, JSON.stringify(list));
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch (err) {
+      /* quota / private mode -- keep running on the in-memory copy */
+    }
   }
 
   // Songs saved before this change have no `updatedAt` -- seed it from
   // `savedAt` (or a low non-zero value) so every row can take part in a merge.
   function normalizeSongs(list) {
-    return list.map((s) => (s && s.updatedAt ? s : { ...s, updatedAt: (s && s.savedAt) || 1 }));
+    // Drop anything that isn't a usable row (corrupt storage / bad import) so
+    // sorting and rendering never trip over a null or a missing title.
+    return list
+      .filter((s) => s && typeof s === "object" && s.id != null)
+      .map((s) => ({ ...s, id: String(s.id), title: String(s.title == null ? "" : s.title), artist: String(s.artist == null ? "" : s.artist) }))
+      .map((s) => (s.updatedAt ? s : { ...s, updatedAt: s.savedAt || 1 }));
   }
 
   function loadSongs(inst) {
@@ -408,6 +417,7 @@
       savedAt: now,
       updatedAt: now,
     };
+    resetCustomForm(); // clears the title so a double-tap can't add it twice
     library.push(entry);
     commit();
     renderLibraryList();

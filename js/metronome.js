@@ -78,8 +78,8 @@
   bpmPlus.addEventListener("click", () => applyBpm(bpm + 1));
 
   bpmInput.addEventListener("change", () => {
-    const parsed = parseInt(bpmInput.value, 10);
-    applyBpm(Number.isFinite(parsed) ? parsed : bpm);
+    const parsed = Math.round(Number(bpmInput.value));
+    applyBpm(bpmInput.value !== "" && Number.isFinite(parsed) ? parsed : bpm);
   });
 
   /* ---------- Tap tempo ---------- */
