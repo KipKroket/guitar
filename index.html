@@ -303,7 +303,7 @@
 
       <!-- Add existing library songs to a setlist -- js/setlists.js. New
            songs come via the normal search overlay instead of a second
-           search UI here (see setlist-add-search-btn). -->
+           search UI here. -->
       <div class="overlay" id="setlist-add-overlay" hidden>
         <div class="overlay__header">
           <button id="setlist-add-back" class="overlay__back" type="button" aria-label="Back">
@@ -312,17 +312,16 @@
           <input id="setlist-add-filter" class="overlay__search-input" type="search" placeholder="Filter your library…" autocomplete="off">
         </div>
 
-        <button id="setlist-add-search-btn" class="custom-song__toggle" type="button">
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m20 20-4.3-4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <span>Search for a new song</span>
-        </button>
-
         <div class="library__empty" id="setlist-add-empty" hidden>
           <p>Your library is empty.</p>
           <p>Search for a new song to add it here.</p>
         </div>
 
         <ul class="song-list" id="setlist-add-list"></ul>
+
+        <div class="setlist-add__savebar">
+          <button id="setlist-add-save" class="save-button setlist-add__save" type="button">Save</button>
+        </div>
       </div>
     </section>
 

@@ -14,8 +14,7 @@
 //   - #setlists-overlay      every saved setlist, "+" makes a new one
 //   - #setlist-detail-overlay  one setlist's songs -- Play / Organize / +
 //   - #setlist-add-overlay   picker: toggle songs already in your library,
-//                             or "Search for a new song" to fall through to
-//                             js/library.js's own search+save flow
+//                             then "Save" to store the selection
 // Exactly one of these (and library.js's own overlays) is ever visible at a
 // time -- opening one hides whichever else was open, same discipline
 // library.js already uses for its own two.
@@ -53,7 +52,7 @@
   const addOverlay = document.getElementById("setlist-add-overlay");
   const addBackBtn = document.getElementById("setlist-add-back");
   const addFilterInput = document.getElementById("setlist-add-filter");
-  const addSearchBtn = document.getElementById("setlist-add-search-btn");
+  const addSaveBtn = document.getElementById("setlist-add-save");
   const addListEl = document.getElementById("setlist-add-list");
   const addEmptyEl = document.getElementById("setlist-add-empty");
 
@@ -262,14 +261,13 @@
     if (organizing) {
       songs.forEach((song, idx) => slListEl.appendChild(renderOrganizeRow(sl.id, song, idx)));
     } else {
-      songs.forEach((song) => {
+      // Tapping a song opens its lyrics & chords and carries on through the
+      // rest of the setlist from there (prev/next in the playbar).
+      songs.forEach((song, idx) => {
         slListEl.appendChild(
           window.GuitarLibrary.renderSongRow(song, {
             withFavStar: true,
-            onOpen: (s) => {
-              returnTarget = { type: "setlist-detail", setlistId: sl.id };
-              window.GuitarLibrary.openDetail(s);
-            },
+            onOpen: () => startPlaySession(sl.id, songs, idx),
           })
         );
       });
@@ -323,6 +321,45 @@
      scoped to the handle in CSS too) so the rest of the row can still be
      scrolled past normally. */
   let dragState = null; // { li, setlistId, pointerId, grabOffsetY }
+  let holdState = null; // touch press waiting out its long-press delay
+  const HOLD_MS = 220;
+  const HOLD_SLOP = 8;
+
+  // The whole card is the drag target. A mouse drags at once; a finger has
+  // to hold for a moment first, so a plain swipe over the cards still
+  // scrolls the list (touch-action: pan-y on the row, see CSS).
+  function onRowPointerDown(e, setlistId, li) {
+    if (e.target.closest(".setlist-row__delete")) return;
+    if (e.pointerType === "mouse") {
+      if (e.button === 0) startDrag(e, setlistId, li);
+      return;
+    }
+    cancelHold();
+    holdState = { li, setlistId, pointerId: e.pointerId, x: e.clientX, y: e.clientY, last: e };
+    holdState.timer = setTimeout(() => {
+      const h = holdState;
+      cancelHold();
+      startDrag(h.last, h.setlistId, h.li);
+    }, HOLD_MS);
+    document.addEventListener("pointermove", onHoldMove);
+    document.addEventListener("pointerup", cancelHold);
+    document.addEventListener("pointercancel", cancelHold);
+  }
+  function onHoldMove(e) {
+    if (!holdState || e.pointerId !== holdState.pointerId) return;
+    holdState.last = e;
+    if (Math.abs(e.clientX - holdState.x) > HOLD_SLOP || Math.abs(e.clientY - holdState.y) > HOLD_SLOP) cancelHold();
+  }
+  function cancelHold() {
+    if (!holdState) return;
+    clearTimeout(holdState.timer);
+    holdState = null;
+    document.removeEventListener("pointermove", onHoldMove);
+    document.removeEventListener("pointerup", cancelHold);
+    document.removeEventListener("pointercancel", cancelHold);
+  }
+  // Once a drag is running, stop the page from scrolling under the finger.
+  document.addEventListener("touchmove", (e) => { if (dragState) e.preventDefault(); }, { passive: false });
 
   function renderOrganizeRow(setlistId, song, idx) {
     const li = document.createElement("li");
@@ -347,7 +384,20 @@
     info.appendChild(artist);
     li.appendChild(info);
 
-    handle.addEventListener("pointerdown", (e) => startDrag(e, setlistId, li));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "setlist-row__delete";
+    del.setAttribute("aria-label", "Remove from setlist");
+    del.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeSongFromSetlist(setlistId, song.id);
+      renderSetlistDetail();
+    });
+    li.appendChild(del);
+
+    li.addEventListener("pointerdown", (e) => onRowPointerDown(e, setlistId, li));
     return li;
   }
 
@@ -365,7 +415,7 @@
 
   function startDrag(e, setlistId, li) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
     const rect = li.getBoundingClientRect();
     dragState = { li, setlistId, pointerId: e.pointerId, grabOffsetY: e.clientY - rect.top };
     try {
@@ -379,10 +429,39 @@
     document.addEventListener("pointercancel", onDragEnd);
   }
 
+  // Keeps the overlay scrolling while a card is held near its top/bottom edge.
+  let edgeRaf = 0;
+  let edgeY = 0;
+  function edgeScrollTick() {
+    edgeRaf = 0;
+    if (!dragState) return;
+    const r = slOverlay.getBoundingClientRect();
+    const zone = 70;
+    let dy = 0;
+    if (edgeY < r.top + zone) dy = -Math.ceil((r.top + zone - edgeY) / 6);
+    else if (edgeY > r.bottom - zone) dy = Math.ceil((edgeY - (r.bottom - zone)) / 6);
+    if (dy) {
+      slOverlay.scrollTop += dy;
+      applyDragTransform({ clientY: edgeY });
+      reorderAround({ clientY: edgeY });
+    }
+    edgeRaf = requestAnimationFrame(edgeScrollTick);
+  }
+  function stopEdgeScroll() {
+    if (edgeRaf) cancelAnimationFrame(edgeRaf);
+    edgeRaf = 0;
+  }
+
   function onDragMove(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
     e.preventDefault();
+    edgeY = e.clientY;
+    if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeScrollTick);
     applyDragTransform(e);
+    reorderAround(e);
+  }
+
+  function reorderAround(e) {
     const li = dragState.li;
     // Repeatedly swap with whichever immediate neighbor the dragged row's
     // current (transformed) center has crossed past, re-measuring after
@@ -422,6 +501,7 @@
     document.removeEventListener("pointermove", onDragMove);
     document.removeEventListener("pointerup", onDragEnd);
     document.removeEventListener("pointercancel", onDragEnd);
+    stopEdgeScroll();
     const newOrder = Array.from(slListEl.children).map((row) => row.dataset.songId);
     reorderSetlist(dragState.setlistId, newOrder);
     dragState = null;
@@ -429,8 +509,14 @@
 
   /* ---------------- Add songs to a setlist ---------------- */
 
+  // The picker works on a staged copy of the setlist's song ids; nothing is
+  // written until "Save" (back discards).
+  let stagedIds = null;
+
   function openAddSongs(setlistId) {
-    if (!getSetlist(setlistId)) return;
+    const sl = getSetlist(setlistId);
+    if (!sl) return;
+    stagedIds = sl.songIds.slice();
     slOverlay.hidden = true;
     addOverlay.hidden = false;
     addFilterInput.value = "";
@@ -439,15 +525,14 @@
   }
 
   function renderAddList(setlistId, query) {
-    const sl = getSetlist(setlistId);
-    if (!sl || !window.GuitarLibrary) return;
+    if (!stagedIds || !window.GuitarLibrary) return;
     const q = query.trim().toLowerCase();
     const all = window.GuitarLibrary.sortedLibrary();
     const filtered = q ? all.filter((s) => (s.title + " " + (s.artist || "")).toLowerCase().includes(q)) : all;
     addEmptyEl.hidden = all.length > 0;
     addListEl.textContent = "";
     filtered.forEach((song) => {
-      const added = sl.songIds.includes(song.id);
+      const added = stagedIds.includes(song.id);
       const li = document.createElement("li");
       li.className = "song-item setlist-pick-row" + (added ? " is-added" : "");
 
@@ -472,8 +557,8 @@
       li.appendChild(toggle);
 
       li.addEventListener("click", () => {
-        if (sl.songIds.includes(song.id)) removeSongFromSetlist(setlistId, song.id);
-        else addSongToSetlist(setlistId, song.id);
+        if (stagedIds.includes(song.id)) stagedIds = stagedIds.filter((id) => id !== song.id);
+        else stagedIds.push(song.id);
         renderAddList(setlistId, addFilterInput.value);
       });
       addListEl.appendChild(li);
@@ -484,21 +569,19 @@
     if (openSetlistId) renderAddList(openSetlistId, addFilterInput.value);
   });
 
-  addBackBtn.addEventListener("click", () => {
+  function leaveAddSongs() {
+    stagedIds = null;
     addOverlay.hidden = true;
     slOverlay.hidden = false;
     renderSetlistDetail();
     syncSettingsFab();
-  });
+  }
 
-  // Falls through to js/library.js's own search+save flow for a song that
-  // isn't in the library yet -- notifySongSaved() below picks it up the
-  // moment it's actually saved there and adds it to this setlist too.
-  addSearchBtn.addEventListener("click", () => {
-    if (!openSetlistId) return;
-    pendingSetlistId = openSetlistId;
-    returnTarget = { type: "setlist-add", setlistId: openSetlistId };
-    if (window.GuitarLibrary && window.GuitarLibrary.openSearch) window.GuitarLibrary.openSearch();
+  addBackBtn.addEventListener("click", leaveAddSongs);
+
+  addSaveBtn.addEventListener("click", () => {
+    if (openSetlistId && stagedIds) reorderSetlist(openSetlistId, stagedIds);
+    leaveAddSongs();
   });
 
   /* ---------------- Play setlist ----------------

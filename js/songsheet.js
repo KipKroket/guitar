@@ -267,7 +267,18 @@
     /^\s*(?:chord (?:diagrams?|chart|legend|shapes?|key|names?)|chords? (?:used|in this song|for this song)|chords?|strumming(?: pattern)?|strum(?:ming)? pattern|rhythm|legend|notes?|n\.?\s?b\.?|tips?|about|info|intro tab|fingerpicking(?: pattern)?)\s*:?\s*$/i,
     /^\s*(?:strumming|strum(?:ming)? pattern|rhythm|pattern|tip|notes?|n\.?\s?b\.?)\s*:\s*\S/i,
   ];
-  const CAPO_LINE_RE = /^\s*\(?\s*capo\s*:?\s*(?:on\s*)?(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:fret)?\s*\)?\s*$/i;
+  // Capo info shows up in many wordings: "Capo 2", "Capo: 3rd fret",
+  // "capo on 2nd fret", "2nd fret capo", "(Capo II)". "no capo" / "without
+  // capo" mean none. Returns the fret number as a string, or null.
+  const ROMAN = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
+  function findCapo(line) {
+    if (!/\bcapo\b/i.test(line) || /\b(?:no|without|don'?t use(?: a)?)\s+capo\b/i.test(line)) return null;
+    let m = line.match(/\bcapo\b\s*(?:[:=\-–]|on|at|@)?\s*(?:the\s+)?(?:fret\s*)?(\d{1,2}|[ivx]{1,4}\b)/i);
+    if (!m) m = line.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*fret\s*(?:with\s*)?capo\b/i);
+    if (!m) return null;
+    const n = /^\d/.test(m[1]) ? +m[1] : ROMAN[m[1].toLowerCase()];
+    return n > 0 && n <= 12 ? String(n) : null;
+  }
 
   // ASCII tab / chord-box lines: "e|---0---|", "|--|--|", "x 0 2 2 1 0", "x02210".
   function isDiagramLine(raw) {
@@ -300,10 +311,15 @@
     const hasCapoDirective = /^\s*\{\s*capo\b/im.test(text);
     let lines = [];
     text.split("\n").forEach((ln) => {
-      const cm = ln.match(CAPO_LINE_RE);
-      if (cm) {
-        if (capo == null && +cm[1] > 0) capo = cm[1];
-        return;
+      // Capo details are collected from every line -- wherever they hide --
+      // before the surrounding junk is thrown away. A short line that is
+      // only about the capo is dropped (the chord chips show it instead).
+      if (!/^\s*\{[^}]*\}\s*$/.test(ln)) {
+        const found = findCapo(ln);
+        if (found != null) {
+          if (capo == null) capo = found;
+          if (ln.length <= 80 && ln.indexOf("[") === -1 && !isChordLine(ln)) return;
+        }
       }
       if (/^\s*\{[^}]*\}\s*$/.test(ln)) {
         lines.push(ln);
@@ -1968,7 +1984,7 @@
     // Transpose sits right under the chord overview it affects, out of the
     // toolbar entirely -- hidden in sync/play-along mode same as before.
     if (!state.syncMode && !state.playAlong.on) {
-      const tpRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
+      const tpRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary songsheet__transpose-row");
       const tp = el("div", "songsheet__transpose");
       const minus = el("button", "songsheet__step", "−");
       minus.type = "button";
