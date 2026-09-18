@@ -11,6 +11,11 @@
   --ember: #B4432A;
   --good: #5C7A45;
   --shadow: rgba(59, 42, 24, 0.18);
+  /* Status yellow for the jam follower's own scroll-follow FAB -- a plain
+     semaphore colour (idle vs. following, see js/jam.js), deliberately not
+     part of the guitar/piano palette swap below since it needs to read the
+     same regardless of which instrument mode the follower is in. */
+  --caution: #D9A82C;
 
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "Work Sans", -apple-system, sans-serif;
@@ -28,6 +33,7 @@
   --ember: #E06B45;
   --good: #8FB56E;
   --shadow: rgba(0, 0, 0, 0.45);
+  --caution: #E6BB4A;
 }
 
 /* ---------- Piano palette ----------
@@ -50,6 +56,41 @@ body[data-instrument="piano"] {
 }
 
 body[data-instrument="piano"][data-theme="dark"] {
+  --bg: #14171C;
+  --surface: #1E222A;
+  --surface-raised: #272C36;
+  --line: #3C424E;
+  --ink: #EDEFF3;
+  --ink-soft: #A7AEBC;
+  --amber: #7098CE;
+  --amber-deep: #95AFDD;
+  --ember: #BC93CD;
+  --good: #85B393;
+  --shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* The jam follower's full-screen view (js/jam.js) tracks its own
+   followerInstrument, independent of this device's real body[data-instrument]
+   -- so it needs its own copy of the piano palette swap, scoped to
+   #jam-view rather than body, applied the same way the follower's chord
+   toggle already scopes its icon colours (see .instrument-switch[data-instrument]
+   below). Custom properties inherit, so everything under .jam-view picks
+   these up without each rule needing its own override. */
+.jam-view[data-instrument="piano"] {
+  --bg: #ECEEF2;
+  --surface: #E1E4EB;
+  --surface-raised: #F5F6F9;
+  --line: #B6BCC9;
+  --ink: #23262D;
+  --ink-soft: #59606F;
+  --amber: #45618F;
+  --amber-deep: #2E4568;
+  --ember: #7A4E8C;
+  --good: #4E7A5C;
+  --shadow: rgba(28, 33, 43, 0.16);
+}
+
+body[data-theme="dark"] .jam-view[data-instrument="piano"] {
   --bg: #14171C;
   --surface: #1E222A;
   --surface-raised: #272C36;
@@ -600,6 +641,23 @@ body[data-instrument="piano"] .instrument-switch__thumb,
    the other stays muted. */
 body[data-instrument="guitar"] .instrument-switch__icon--guitar,
 body[data-instrument="piano"] .instrument-switch__icon--piano,
+.instrument-switch[data-instrument="guitar"] .instrument-switch__icon--guitar,
+.instrument-switch[data-instrument="piano"] .instrument-switch__icon--piano {
+  color: var(--bg);
+}
+
+/* A switch with its own local data-instrument (the jam follower's toggle)
+   must win over the ambient body[data-instrument] rules above, or a
+   follower on a guitar-mode phone with their local toggle set to piano gets
+   the guitar icon's "under the thumb" contrast colour (var(--bg), i.e.
+   invisible against the page background) even though the thumb has
+   actually slid over to piano. Both selectors below have one more class/
+   attribute component than the body-scoped ones, which outranks them
+   regardless of source order. */
+.instrument-switch[data-instrument] .instrument-switch__icon--guitar,
+.instrument-switch[data-instrument] .instrument-switch__icon--piano {
+  color: var(--ink-soft);
+}
 .instrument-switch[data-instrument="guitar"] .instrument-switch__icon--guitar,
 .instrument-switch[data-instrument="piano"] .instrument-switch__icon--piano {
   color: var(--bg);
@@ -2115,19 +2173,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 
 /* ---------- Samen jammen (js/jam.js) ---------- */
 
-/* Persistent pill while a jam is active (hosting or following) --
-   position:absolute against .app, same top anchor as .settings-fab, but
-   above overlays (z-index 20) so it stays visible while browsing a song.
-   Sits to the right of the page title (Library/Chords/Settings all clear
-   by this offset) rather than next to the gear, where it used to overlap
-   the title text. */
+/* Persistent pill while a jam is active (hosting or following) -- js/jam.js
+   moves the actual node between three spots depending on what's on screen
+   (never a fixed position of its own): between the "Library" title and the
+   instrument switch on the library page, centred above the art on a song's
+   info page, or out of the DOM entirely (tuner/metronome/chords, and
+   library search) where it just stays hidden. position:relative (not the
+   old absolute/top/left) so it lays out as a normal flex child wherever
+   it's parented; the dropdown panel below still anchors off this box. */
 .jam-island {
-  position: absolute;
-  top: calc(env(safe-area-inset-top) + 0.5rem);
-  left: 10.5rem;
+  position: relative;
   z-index: 21;
 }
 .jam-island[hidden] { display: none; }
+#song-detail > .jam-island { margin-bottom: 1rem; }
 .jam-island__pill {
   display: flex;
   align-items: center;
@@ -2188,6 +2247,20 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   -webkit-tap-highlight-color: transparent;
 }
 .jam-island__btn--danger { border-color: var(--ember); color: var(--ember); }
+
+/* Round share button next to "Stop jam" in the expanded pill panel -- same
+   idea as .jam-island__btn but fixed circular size instead of flex:1, so it
+   reads as an icon action rather than another text button in the row. */
+.jam-island__share {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* Follower's full-screen jam view -- replaces the whole app (page content
    AND bottom nav) while following, same "position:absolute against .app"
@@ -2250,20 +2323,38 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   -webkit-tap-highlight-color: transparent;
 }
 .jam-view__follow-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
-.jam-view__follow-toggle {
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink-soft);
-  font-family: var(--font-body);
-  font-size: 0.76rem;
+
+/* Bottom-right FAB, same size/shape as the host's own .songsheet__fab-btn --
+   but this one only ever toggles whether THIS follower's screen keeps
+   following the host, independent of anyone else. Yellow/idle whenever the
+   host isn't currently sending a scroll position at all; green + actually
+   following once the host is *and* this follower hasn't paused it. See
+   js/jam.js applyFollowerScroll()/updateScrollFabUI(). Anchored against
+   #jam-view itself (position:absolute; inset:0, see .jam-view above) since
+   the bottom nav is fully covered while this view is showing, unlike the
+   host's own equivalent which has to clear it. */
+.jam-view__scroll-fab {
+  position: absolute;
+  right: calc(1.1rem + env(safe-area-inset-right));
+  bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--caution);
+  background: var(--caution);
+  color: var(--bg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.jam-view__follow-toggle.is-active {
+.jam-view__scroll-fab:active { transform: translateY(1px); }
+.jam-view__scroll-fab.is-following {
   border-color: var(--good);
-  color: var(--good);
+  background: var(--good);
 }
 .jam-view__waiting {
   margin-top: 3rem;

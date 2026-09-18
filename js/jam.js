@@ -14,8 +14,8 @@
 // lyrics, not meant for anything tighter.
 (function () {
   const API_BASE = "https://guitar-sync.julianleendertse.workers.dev/jam";
-  const HOST_TICK_MS = 1200;
-  const FOLLOW_POLL_MS = 2000;
+  const HOST_TICK_MS = 800;
+  const FOLLOW_POLL_MS = 1000;
   // sessionStorage, not localStorage -- a jam is a one-sitting thing, and a
   // stale "still hosting"/"still following" flag lingering into an
   // unrelated future app open would be worse than just starting fresh.
@@ -36,6 +36,22 @@
   let followerSteps = null; // buildChordSteps() result for the currently rendered sheet
   let followerChordEls = null; // "lineIdx:order" -> chord element, for incremental play-along highlighting
   let followerLastData = null; // most recent /poll response, reapplied after an instrument-toggle rebuild
+  // Continuous scroll-follow: the host only reports its position once a
+  // poll (~1s), which used to mean applyFollowerScroll() drove one
+  // .scrollTo({behavior:"smooth"}) per poll -- each one starts and stops
+  // its own short animation, so motion visibly stepped once a second
+  // instead of gliding. Now a poll only updates followerTargetLine; a
+  // standing rAF loop (followerScrollFrame) eases followerRenderedLine
+  // toward it every frame, so the visible position moves continuously
+  // between polls too, at whatever rate keeps it caught up.
+  let followerScrollRAF = null;
+  let followerScrollLastTs = null;
+  let followerTargetLine = null;
+  let followerRenderedLine = null;
+  // Whether the host is currently reporting ANY scroll position (autoscroll
+  // running, or just scrolled by hand -- see songsheet.js getJamSnapshot())
+  // -- drives the scroll-follow FAB's colour independent of autoFollow.
+  let followerScrollActive = false;
   // Which instrument's diagrams a follower sees for chord chips/popovers --
   // independent of the host's own instrument and of this follower's own app
   // identity (switching that would also flip the tuner, nav colours, etc.
@@ -178,7 +194,11 @@
     render();
   }
 
-  async function shareJamLink() {
+  // `triggerBtn` is whichever share button was actually tapped -- the
+  // Settings card's text button or the pill's round icon button (see
+  // renderIsland()) -- so the clipboard-fallback "Copied!" feedback lands
+  // on the right one instead of always the Settings button.
+  async function shareJamLink(triggerBtn) {
     if (!session || session.role !== "host") return;
     const url = new URL(location.origin + location.pathname);
     url.searchParams.set("jam", session.code);
@@ -194,12 +214,11 @@
     if (navigator.clipboard && navigator.clipboard.writeText) {
       try {
         await navigator.clipboard.writeText(link);
-        const btn = document.getElementById("jam-host-share-btn");
-        if (btn) {
-          const original = btn.textContent;
-          btn.textContent = "Copied!";
+        if (triggerBtn) {
+          const original = triggerBtn.textContent;
+          triggerBtn.textContent = "Copied!";
           setTimeout(() => {
-            btn.textContent = original;
+            triggerBtn.textContent = original;
           }, 1500);
         }
       } catch (err) {
@@ -299,13 +318,6 @@
     root.appendChild(header);
 
     const followRow = el("div", "jam-view__follow-row");
-    const followToggle = el("button", "jam-view__follow-toggle");
-    followToggle.type = "button";
-    followToggle.addEventListener("click", () => {
-      autoFollow = !autoFollow;
-      updateFollowToggleUI();
-    });
-    followRow.appendChild(followToggle);
 
     // Same segmented icon slider as the library/chord-book headers (see
     // .instrument-switch in css/style.css) rather than a plain text pill --
@@ -349,9 +361,24 @@
     body.hidden = true;
     root.appendChild(body);
 
-    followerEls = { root, art, title, artist, followToggle, instrumentToggle, waiting, chipsWrap, body };
-    updateFollowToggleUI();
+    // Bottom-right FAB -- this follower's own on/off for being carried
+    // along by the host's scroll position, independent of the host and of
+    // every other follower. See applyFollowerScroll()/updateScrollFabUI().
+    const scrollFab = el("button", "jam-view__scroll-fab");
+    scrollFab.type = "button";
+    scrollFab.setAttribute("aria-label", "Toggle following the host's scroll");
+    scrollFab.innerHTML =
+      '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    scrollFab.addEventListener("click", () => {
+      autoFollow = !autoFollow;
+      updateScrollFabUI();
+    });
+    root.appendChild(scrollFab);
+
+    followerEls = { root, art, title, artist, instrumentToggle, waiting, chipsWrap, body, scrollFab };
+    updateScrollFabUI();
     updateInstrumentToggleUI();
+    if (followerScrollRAF == null) followerScrollRAF = requestAnimationFrame(followerScrollFrame);
   }
 
   function teardownFollowerView() {
@@ -363,12 +390,21 @@
     followerShown = null;
     followerSteps = null;
     followerChordEls = null;
+    if (followerScrollRAF != null) {
+      cancelAnimationFrame(followerScrollRAF);
+      followerScrollRAF = null;
+    }
+    followerScrollLastTs = null;
+    followerTargetLine = null;
+    followerRenderedLine = null;
+    followerScrollActive = false;
   }
 
-  function updateFollowToggleUI() {
-    if (!followerEls) return;
-    followerEls.followToggle.textContent = autoFollow ? "Following" : "Paused — tap to resume";
-    followerEls.followToggle.classList.toggle("is-active", autoFollow);
+  function updateScrollFabUI() {
+    if (!followerEls || !followerEls.scrollFab) return;
+    const following = autoFollow && followerScrollActive;
+    followerEls.scrollFab.classList.toggle("is-following", following);
+    followerEls.scrollFab.setAttribute("aria-pressed", following ? "true" : "false");
   }
 
   function updateInstrumentToggleUI() {
@@ -376,6 +412,11 @@
     const piano = followerInstrument === "piano";
     followerEls.instrumentToggle.dataset.instrument = followerInstrument;
     followerEls.instrumentToggle.setAttribute("aria-checked", piano ? "true" : "false");
+    // Recolours the whole full-screen view to match, same as switching
+    // instrument does app-wide -- see .jam-view[data-instrument] in
+    // css/style.css. Deliberately independent of body[data-instrument]
+    // (this follower's real app mode), same as followerInstrument itself.
+    followerEls.root.dataset.instrument = followerInstrument;
   }
 
   function updateFollowerView(data) {
@@ -405,6 +446,10 @@
       renderFollowerChips(SS, followerShown);
       renderFollowerBody(SS, followerShown);
       followerEls.body.scrollTop = 0;
+      // A new song/sheet renumbers every line -- the last song's target/
+      // rendered position means nothing here, so don't glide in from it.
+      followerTargetLine = null;
+      followerRenderedLine = null;
     }
 
     applyFollowerHighlight(data);
@@ -521,20 +566,48 @@
     return topF + (topC - topF) * frac - box.clientHeight * 0.3;
   }
 
+  // Records what the latest poll says the host is doing -- the actual
+  // scrolling happens continuously in followerScrollFrame() below, not
+  // here, so a poll landing doesn't itself cause a visible step.
   function applyFollowerScroll(data) {
-    if (!autoFollow) return;
-    if (data.mode !== "timestamps" && data.mode !== "autoscroll") return;
-    if (!data.pos || data.pos.line == null) return;
-    // The lyrics list (.jam-view__body, sharing songsheet.js's own
-    // .songsheet__body class) is its own scroll container -- that class
-    // sets overflow-x: auto, which per spec forces overflow-y to auto too
-    // wherever the other axis isn't set, so inside #jam-view's column flex
-    // layout the body claims all the scrolling itself instead of stretching
-    // #jam-view into one. #jam-view.scrollTop stays 0 forever; scrolling
-    // the wrong element here silently did nothing.
+    const active = data.mode === "timestamps" || data.mode === "autoscroll";
+    followerScrollActive = active;
+    updateScrollFabUI();
+    if (!active || !data.pos || data.pos.line == null) return;
+    followerTargetLine = data.pos.line;
+    // First sample for this song, or a big jump (host opened a different
+    // part of a long sheet, or a seek) -- snap instead of gliding across
+    // the whole visible sheet over the next second.
+    if (followerRenderedLine == null || Math.abs(followerTargetLine - followerRenderedLine) > 8) {
+      followerRenderedLine = followerTargetLine;
+    }
+  }
+
+  // Runs continuously (not just once per poll) while the follower view
+  // exists, easing followerRenderedLine toward whatever followerTargetLine
+  // the last poll set. This is what actually turns "a new number every
+  // ~1s" into a smooth glide: .scrollTo({behavior:"smooth"}) used to be
+  // called fresh on every poll, so each one started and stopped its own
+  // short animation -- visible as a once-a-second step rather than
+  // continuous motion. autoFollow (this follower's own pause) gates it the
+  // same way it always has.
+  function followerScrollFrame(ts) {
+    followerScrollRAF = requestAnimationFrame(followerScrollFrame);
+    if (!followerEls || followerEls.body.hidden || !autoFollow || followerTargetLine == null || followerRenderedLine == null) {
+      followerScrollLastTs = ts;
+      return;
+    }
+    const dt = followerScrollLastTs != null ? (ts - followerScrollLastTs) / 1000 : 0;
+    followerScrollLastTs = ts;
+    // Exponential ease -- tau picked so it's most of the way to a fresh
+    // target well within one poll interval, without overshoot if the host
+    // pauses right after a jump.
+    const tau = 0.4;
+    const k = dt > 0 ? 1 - Math.exp(-dt / tau) : 0;
+    followerRenderedLine += (followerTargetLine - followerRenderedLine) * k;
     const box = followerEls.body;
-    const y = followerVirtualLineToScrollTop(box, data.pos.line);
-    if (y != null) box.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+    const y = followerVirtualLineToScrollTop(box, followerRenderedLine);
+    if (y != null) box.scrollTop = Math.max(0, Math.round(y));
   }
 
   /* =====================================================================
@@ -589,10 +662,39 @@
     }
   }
 
+  // Where the pill is allowed to show, and where exactly it sits within
+  // that spot -- it has no position of its own any more (see .jam-island in
+  // css/style.css), so js/app.js's current page and js/library.js's detail
+  // overlay both have to be checked fresh on every render, not just once.
+  function placeJamIsland(island) {
+    if (window.GuitarLibrary && window.GuitarLibrary.isDetailOpen && window.GuitarLibrary.isDetailOpen()) {
+      const detail = document.getElementById("song-detail");
+      if (detail) {
+        if (island.parentElement !== detail || island !== detail.firstChild) {
+          detail.insertBefore(island, detail.firstChild);
+        }
+        return true;
+      }
+    }
+    const page = window.GuitarApp && window.GuitarApp.getCurrentPage ? window.GuitarApp.getCurrentPage() : null;
+    if (page === "library") {
+      const header = document.querySelector("#page-library .library__header");
+      const actions = document.querySelector("#page-library .library__actions");
+      if (header && actions) {
+        if (island.nextElementSibling !== actions || island.parentElement !== header) {
+          header.insertBefore(island, actions);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   function renderIsland() {
     const island = document.getElementById("jam-island");
     if (!island) return;
-    if (!session) {
+    const allowedHere = placeJamIsland(island);
+    if (!session || !allowedHere) {
       island.hidden = true;
       island.textContent = "";
       return;
@@ -631,13 +733,26 @@
         row.appendChild(no);
         panel.appendChild(row);
       } else {
+        const row = el("div", "jam-island__row");
         const stop = el("button", "jam-island__btn jam-island__btn--danger", "Stop jam");
         stop.type = "button";
         stop.addEventListener("click", () => {
           confirmStop = true;
           renderIsland();
         });
-        panel.appendChild(stop);
+        row.appendChild(stop);
+        // Round share button -- same link as Settings' "Share link", just
+        // reachable without leaving whatever page the pill is on. Apple's
+        // standard share glyph (a box with an arrow out of its top), not a
+        // custom icon, so it reads as "share" at a glance.
+        const share = el("button", "jam-island__btn jam-island__share");
+        share.type = "button";
+        share.setAttribute("aria-label", "Share jam link");
+        share.innerHTML =
+          '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M7.5 7.5 12 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 11v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        share.addEventListener("click", () => shareJamLink(share));
+        row.appendChild(share);
+        panel.appendChild(row);
       }
     } else {
       panel.appendChild(el("p", "jam-island__note", "Following jam " + session.code));
@@ -661,7 +776,7 @@
     settingsEls.joinInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") joinJam(settingsEls.joinInput.value);
     });
-    settingsEls.hostShareBtn.addEventListener("click", shareJamLink);
+    settingsEls.hostShareBtn.addEventListener("click", () => shareJamLink(settingsEls.hostShareBtn));
     settingsEls.hostStopBtn.addEventListener("click", stopJam);
     settingsEls.leaveBtn.addEventListener("click", leaveJam);
   }
@@ -679,6 +794,12 @@
     if (session && session.role === "follower" && session.code === code.toUpperCase()) return;
     joinJam(code);
   }
+
+  // Neither of these fires anything else the island cares about (its own
+  // session-state changes already call render()/renderIsland() directly) --
+  // just a reposition-or-hide pass for whatever page/overlay is now showing.
+  document.addEventListener("pagechange", renderIsland);
+  document.addEventListener("songdetailchange", renderIsland);
 
   function boot() {
     wireSettingsButtons();

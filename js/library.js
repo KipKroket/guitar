@@ -151,11 +151,16 @@
     });
   }
 
-  // Whether js/songsheet.js has saved lyric-sync timestamps for this song
-  // (against any source it's been played from) -- used to badge the row in
-  // the library list, see renderSongRow below.
+  // Whether js/songsheet.js has saved lyric-sync timestamps for this song --
+  // used to badge the row in the library list, see renderSongRow below.
+  // `lyricsSync` is a flat array of points these days (one list per song,
+  // not per recording); a plain object here means it hasn't been opened
+  // since the old Build 31-41 per-recording shape, which songsheet.js's own
+  // getSyncPoints() migrates in place the first time the song's sheet is
+  // opened -- until then, this still has to read the old shape directly.
   function songHasTimestamps(song) {
     const sync = song && song.lyricsSync;
+    if (Array.isArray(sync)) return sync.length > 0;
     if (!sync || typeof sync !== "object") return false;
     return Object.keys(sync).some((k) => Array.isArray(sync[k]) && sync[k].length > 0);
   }
@@ -674,6 +679,9 @@
     detailOverlay.hidden = false;
     closeSearch();
     syncSettingsFab();
+    // js/jam.js listens for this to move the "jam active" pill onto the
+    // song's info page (and back off it on close).
+    document.dispatchEvent(new CustomEvent("songdetailchange", { detail: { open: true } }));
 
     // Lyrics-with-chords sheet (js/songsheet.js). Available for every song,
     // custom ones included -- a custom song is exactly where you'd paste
@@ -702,6 +710,7 @@
     currentDetailSong = null;
     detailBpm = null;
     detailSeq++; // invalidate any in-flight tempo lookup
+    document.dispatchEvent(new CustomEvent("songdetailchange", { detail: { open: false } }));
   }
 
   detailMetronomeBtn.addEventListener("click", () => {
@@ -889,7 +898,7 @@
 
   // Exposed for js/sync.js (optional cloud sync) and js/spotify.js /
   // js/backingtrack.js (setSongField).
-  window.GuitarLibrary = { getAllSnapshot, applySnapshot, setSongField };
+  window.GuitarLibrary = { getAllSnapshot, applySnapshot, setSongField, isDetailOpen: () => !detailOverlay.hidden };
 
   /* ---------- Backup buttons (Settings) ---------- */
   const exportBtn = document.getElementById("export-btn");

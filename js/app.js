@@ -108,6 +108,9 @@
     // The gear would sit on top of the Settings page's own back arrow.
     if (settingsFab) settingsFab.hidden = target === "settings";
     if (target === "chords" && window.GuitarChords) window.GuitarChords.refresh();
+    // js/jam.js listens for this to reposition (or hide) the "jam active"
+    // pill -- it only ever shows on the library page or a song's info page.
+    document.dispatchEvent(new CustomEvent("pagechange", { detail: { page: target } }));
   }
 
   navButtons.forEach((btn) => {
@@ -192,7 +195,7 @@
 
   // Exposed so the song library can read the current instrument and switch
   // tabs without needing its own copy of this logic.
-  window.GuitarApp = { showPage, getInstrument: () => instrument };
+  window.GuitarApp = { showPage, getInstrument: () => instrument, getCurrentPage: () => currentPage };
 
   /* ---------- Theme ---------- */
   const themeToggle = document.getElementById("theme-toggle");
@@ -214,7 +217,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "42";
+  const BUILD = "43";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 

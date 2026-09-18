@@ -660,29 +660,57 @@
   }
 
   /* ---- Lyric sync -- ties lyric lines to a Spotify/YouTube position ----
-     Sync points are `{ line, ms }`, kept sorted by ms, stored per source
-     recording (see getSourceKey() in js/spotify.js / js/backingtrack.js) as
-     `song.lyricsSync` -- on the song object itself (via GuitarLibrary.setSongField,
-     same as spotifyTrackId/backingTrackUrl), NOT inside the sheet record.
-     That's deliberate: the sheet record lives in its own untracked storage
-     key that never reaches cloud sync or export (the raw chord/lyric text is
-     usually copyrighted), but a timestamp map has no copyrighted content of
-     its own and the user explicitly wants it backed up alongside the
-     YouTube link it's keyed against -- setSongField already rides along with
-     sync/export for exactly this kind of small per-song metadata.
-     Caveat worth knowing: the line indices only mean anything next to the
-     exact sheet text they were tapped against, and that text does NOT sync
-     -- restoring on a new device (or after re-pasting a differently-worded
-     sheet) needs the identical line-for-line text before the timestamps line
-     up again. Editing/replacing the raw text clears lyricsSync for exactly
-     this reason (see clearLyricsSync()); transpose doesn't touch it. ---- */
+     Sync points are `{ line, ms, text }`, kept sorted by ms, stored as one
+     flat list on the song itself -- `song.lyricsSync` (via
+     GuitarLibrary.setSongField, same as spotifyTrackId/backingTrackUrl),
+     NOT inside the sheet record. That's deliberate: the sheet record lives
+     in its own untracked storage key that never reaches cloud sync or
+     export (the raw chord/lyric text is usually copyrighted), but a
+     timestamp map has no copyrighted content of its own and the user
+     explicitly wants it backed up alongside the YouTube link it's checked
+     against -- setSongField already rides along with sync/export for
+     exactly this kind of small per-song metadata.
+     One list per SONG, not per recording (Spotify track / YouTube video) --
+     a song's lyric timing is practically the same take to take (a few
+     seconds off here and there doesn't matter for autoscroll), and the
+     whole point is to tag it once and have it work for whichever version
+     you happen to be playing back next time. `getActivePlayback()` below
+     still reports which recording is live (for its playback position, ms),
+     it just no longer decides which timestamp list to read.
+     `text` is the tagged line's own normalized lyric text, kept alongside
+     `line` so a re-fetched or re-pasted sheet -- which renumbers/rewords
+     every line -- has something sturdier than the old index to recover the
+     point against; see remapOrClearLyricsSync(). Points saved by earlier
+     builds don't have `text` yet -- remap falls back to reading it from the
+     sheet text that was still current when the edit happened. */
 
   function clearLyricsSync() {
     if (!state || !state.song) return;
-    state.song.lyricsSync = {};
+    state.song.lyricsSync = [];
     if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
-      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: {} });
+      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: [] });
     }
+  }
+
+  // Reads state.song.lyricsSync, migrating the old Build 31-41 shape (an
+  // object keyed by source recording, `{ "spotify:<id>": [{line,ms}] }`) to
+  // the new flat per-song list the first time it's seen, in place -- a
+  // song's timestamps used to differ by a few seconds per recording anyway,
+  // so flattening every recording's points together and letting duplicates
+  // (one per line, closest ms wins via the same "tapping again replaces"
+  // rule used elsewhere) sort out is fine.
+  function getSyncPoints() {
+    if (!state || !state.song) return [];
+    const raw = state.song.lyricsSync;
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === "object") {
+      const byLine = new Map();
+      Object.keys(raw).forEach((k) => (raw[k] || []).forEach((p) => byLine.set(p.line, p)));
+      const flat = Array.from(byLine.values()).sort((a, b) => a.ms - b.ms);
+      saveSyncPoints(flat);
+      return flat;
+    }
+    return [];
   }
 
   function getActivePlayback() {
@@ -715,7 +743,7 @@
   function hasSyncAvailable() {
     const active = getActivePlayback();
     if (!active || !state || !state.song) return false;
-    return ((state.song.lyricsSync && state.song.lyricsSync[active.key]) || []).length >= 2;
+    return getSyncPoints().length >= 2;
   }
 
   // What autoscroll should actually do this frame: null falls back to the
@@ -725,9 +753,9 @@
     if (!state || !state.song || state.autoscroll.forceManual) return null;
     const active = getActivePlayback();
     if (!active) return null;
-    const points = (state.song.lyricsSync && state.song.lyricsSync[active.key]) || [];
+    const points = getSyncPoints();
     if (points.length < 2) return null;
-    return { key: active.key, points, posMs: active.ms };
+    return { points, posMs: active.ms };
   }
 
   function formatSyncTime(ms) {
@@ -735,53 +763,101 @@
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
 
-  function saveSyncPoints(sync) {
+  function saveSyncPoints(points) {
     if (!state || !state.song) return;
-    state.song.lyricsSync = sync;
+    state.song.lyricsSync = points;
     if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
-      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: sync });
+      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: points });
     }
   }
 
-  function cloneSync(sync) {
-    const out = {};
-    Object.keys(sync || {}).forEach((k) => (out[k] = sync[k].slice()));
-    return out;
+  // Collapses a chord/lyric line down to comparable, wording-only text --
+  // used both to tag a point's `text` and to look it back up in a
+  // differently-formatted (but not differently-worded) re-fetch.
+  function normalizeLyricText(s) {
+    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
 
-  // Tapping a line that already has a point for the active source just
-  // moves it to the current position -- the same tap is how you both create
-  // a point and correct one you notice has drifted while playing along.
-  function addSyncPoint(lineIdx) {
+  // Every lyric line's normalized text, in the same flat order/numbering
+  // `line` indices use elsewhere (renderSheet, getJamSnapshot, ...) --
+  // section labels and blank-line breaks don't get an index, only actual
+  // lines do.
+  function flatLyricLineTexts(raw) {
+    const model = parseSheet(raw);
+    const texts = [];
+    model.sections.forEach((section) => {
+      section.lines.forEach((line) => {
+        if (line == null) return;
+        texts.push(normalizeLyricText(line.lyric));
+      });
+    });
+    return texts;
+  }
+
+  // Tapping a line that already has a point just moves it to the current
+  // position -- the same tap is how you both create a point and correct
+  // one you notice has drifted while playing along. `lyricText` is the raw
+  // (un-normalized) text of that exact line, from the render loop that
+  // already has it -- see the click handler in renderSheet().
+  function addSyncPoint(lineIdx, lyricText) {
     const active = getActivePlayback();
     if (!active || !state.song) return;
-    const sync = cloneSync(state.song.lyricsSync);
-    const arr = (sync[active.key] || []).filter((p) => p.line !== lineIdx);
-    arr.push({ line: lineIdx, ms: Math.round(active.ms) });
+    const arr = getSyncPoints().filter((p) => p.line !== lineIdx);
+    arr.push({ line: lineIdx, ms: Math.round(active.ms), text: normalizeLyricText(lyricText) });
     arr.sort((a, b) => a.ms - b.ms);
-    sync[active.key] = arr;
-    saveSyncPoints(sync);
+    saveSyncPoints(arr);
     render();
   }
 
-  function removeSyncPoint(lineIdx, key) {
+  function removeSyncPoint(lineIdx) {
     if (!state.song) return;
-    const sync = cloneSync(state.song.lyricsSync);
-    sync[key] = (sync[key] || []).filter((p) => p.line !== lineIdx);
-    saveSyncPoints(sync);
+    saveSyncPoints(getSyncPoints().filter((p) => p.line !== lineIdx));
     render();
   }
 
   // Single "clear all" for sync mode -- removing points one at a time by
   // tapping each time-badge is tedious once there are more than a couple.
-  // Only clears the currently-playing source's points, not every source
-  // this sheet has ever been tagged against.
-  function clearAllSyncPoints(key) {
+  function clearAllSyncPoints() {
     if (!state.song) return;
-    const sync = cloneSync(state.song.lyricsSync);
-    delete sync[key];
-    saveSyncPoints(sync);
+    saveSyncPoints([]);
     render();
+  }
+
+  // Called instead of clearLyricsSync() whenever the raw sheet text is
+  // about to change (fetch, paste, or picking a fetched candidate) -- tries
+  // to carry each point over to the new text by its line's own wording
+  // before giving up on it. Only an exact match on the normalized text
+  // counts, and only if it's unique in the new sheet -- a line that
+  // doesn't appear at all, or that the new text repeats more than once
+  // (ambiguous which one it moved to), just drops that one point rather
+  // than keeping a guess. Falls back to clearing everything if fewer than
+  // 2 points survive, same threshold sync needs to do anything with them.
+  function remapOrClearLyricsSync(oldRaw, newRaw) {
+    if (!state || !state.song) return;
+    const points = getSyncPoints();
+    if (!points.length) return;
+    const oldTexts = flatLyricLineTexts(oldRaw);
+    const newTexts = flatLyricLineTexts(newRaw);
+    const remapped = [];
+    points.forEach((p) => {
+      const text = p.text || oldTexts[p.line] || "";
+      if (!text) return;
+      let foundAt = -1;
+      let count = 0;
+      for (let i = 0; i < newTexts.length; i++) {
+        if (newTexts[i] === text) {
+          count++;
+          foundAt = i;
+        }
+      }
+      if (count === 1) remapped.push({ line: foundAt, ms: p.ms, text });
+    });
+    if (remapped.length >= 2) {
+      remapped.sort((a, b) => a.ms - b.ms);
+      saveSyncPoints(remapped);
+    } else {
+      clearLyricsSync();
+    }
   }
 
   /* ---- Play along --------------------------------------------------------
@@ -1369,13 +1445,14 @@
   // with the same text ready to save.
   function applyFetchedSheet(rec) {
     const songId = state.song.id;
+    const oldRaw = state.record ? state.record.raw : "";
     saveSheet(state.inst, songId, {
       raw: rec.raw,
       source: rec.source || "fetch",
       transpose: (state.record && state.record.transpose) | 0,
     });
     state.record = loadSheet(state.inst, songId);
-    clearLyricsSync(); // new text -- old line-indexed timestamps no longer line up
+    remapOrClearLyricsSync(oldRaw, rec.raw); // try to carry timestamps over by line wording first
     state.adding = false;
     state.candidates = null;
     state.fetchError = null;
@@ -1469,13 +1546,14 @@
         doFetch(url); // a lone link -- fetch and parse that exact page
         return;
       }
+      const oldRaw = state.record ? state.record.raw : "";
       saveSheet(state.inst, state.song.id, {
         raw,
         source: "paste",
         transpose: (state.record && state.record.transpose) | 0,
       });
       state.record = loadSheet(state.inst, state.song.id);
-      clearLyricsSync(); // new text -- old line-indexed timestamps no longer line up
+      remapOrClearLyricsSync(oldRaw, raw); // try to carry timestamps over by line wording first
       state.adding = false;
       render();
     });
@@ -1534,9 +1612,7 @@
     // once there are more than a couple. Placed left of "Done syncing" (see
     // below), i.e. appended first.
     const activePlaybackForClear = state.syncMode ? getActivePlayback() : null;
-    const clearableCount = activePlaybackForClear
-      ? ((state.song.lyricsSync && state.song.lyricsSync[activePlaybackForClear.key]) || []).length
-      : 0;
+    const clearableCount = activePlaybackForClear ? getSyncPoints().length : 0;
     if (state.syncMode && clearableCount > 0) {
       if (state.confirmClearSync) {
         const confirmWrap = el("div", "songsheet__confirm");
@@ -1546,7 +1622,7 @@
         const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear");
         yes.type = "button";
         yes.addEventListener("click", () => {
-          clearAllSyncPoints(activePlaybackForClear.key);
+          clearAllSyncPoints();
           state.confirmClearSync = false;
         });
         const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
@@ -1737,7 +1813,7 @@
     lineWeights = [];
     let flatLineIdx = 0;
     const activePlayback = state.syncMode ? getActivePlayback() : null;
-    const activeSyncArr = activePlayback ? (state.song.lyricsSync && state.song.lyricsSync[activePlayback.key]) || [] : null;
+    const activeSyncArr = activePlayback ? getSyncPoints() : null;
     // The set of "lineIdx:order" chord occurrences belonging to whichever
     // step play-along is currently on -- see buildChordSteps() and the
     // stepKey lookup in renderLine().
@@ -1776,14 +1852,14 @@
             lineEl.classList.add("ss-line--syncable");
             lineEl.addEventListener("click", (e) => {
               e.stopPropagation();
-              addSyncPoint(idx);
+              addSyncPoint(idx, line.lyric);
             });
           }
           if (existing) {
             const badge = el("span", "ss-line__synctime", formatSyncTime(existing.ms));
             badge.addEventListener("click", (e) => {
               e.stopPropagation();
-              removeSyncPoint(idx, activePlayback.key);
+              removeSyncPoint(idx);
             });
             lineEl.appendChild(badge);
           }
