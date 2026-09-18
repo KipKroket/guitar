@@ -167,7 +167,10 @@ body {
    own back arrow). Below the library overlays (z-index 20) so they cover it. */
 .settings-fab {
   position: absolute;
-  top: calc(env(safe-area-inset-top) + 0.5rem);
+  /* Vertically centered on the "Library" title beside it, not on the top
+     edge of the page -- #page-container's own top padding pushes the
+     title down further than this button's default offset would land. */
+  top: calc(env(safe-area-inset-top) + 1.85rem);
   left: 0.65rem;
   z-index: 15;
   display: flex;
@@ -1802,6 +1805,40 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 }
 .audio-dock__bar-status--error { color: var(--amber-deep); }
 
+.songsheet__chipshead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.songsheet__chipshead-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+/* "Show all" grid -- every chord in the sheet at once, for running through
+   the whole progression before playing rather than looking one up at a
+   time (see the chip row below, which stays one-at-a-time for the swap
+   picker). Reuses the same .mini-chord__* rules as the chip card and the
+   chord book, just several at once. */
+.songsheet__chordgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.7rem;
+}
+.songsheet__chordgrid .mini-chord {
+  padding: 0.75rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  text-align: center;
+}
+.songsheet__chordgrid .mini-chord__diagram .fretboard { width: 100px; }
+.songsheet__chordgrid .mini-chord__diagram .keyboard { max-width: 100%; }
+
 .songsheet__chips {
   display: flex;
   flex-wrap: wrap;
@@ -2403,3 +2440,139 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 .jam-view__waiting[hidden] { display: none; }
 .jam-view__chips-wrap[hidden] { display: none; }
 .jam-view__body[hidden] { display: none; }
+
+/* ---------- Setlists (js/setlists.js) ---------- */
+/* Entry point in the library header -- same circular-pill sizing as the
+   floating Settings gear (34px), just inline instead of absolutely
+   positioned, sitting left of the guitar/piano switch. */
+.setlists-open-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.setlists-open-btn:active { transform: translateY(1px); }
+
+.setlist-detail__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.setlist-detail__actions .songsheet__btn--lg { flex: 1; }
+
+.setlist-detail__confirm {
+  margin: -0.4rem 0 1rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+.setlist-detail__confirm[hidden] { display: none; }
+.setlist-detail__confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+/* Add-to-setlist picker row -- a .song-item with a trailing toggle instead
+   of the library row's own click-to-open behaviour (tapping the row adds/
+   removes it from the setlist directly, nothing to navigate into). */
+.setlist-pick-row {
+  cursor: pointer;
+}
+.setlist-pick-row__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-soft);
+}
+.setlist-pick-row.is-added .setlist-pick-row__toggle {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--bg);
+}
+
+/* Organize mode -- a drag handle replaces the row's own click-to-open, and
+   the whole row can be picked up and dropped on another to reorder. Touch-
+   driven (pointer events in JS, not native HTML5 drag/drop, which mobile
+   Safari/Chrome don't support well) -- see js/setlists.js dragging state. */
+.setlist-row--organize { cursor: default; }
+/* touch-action:none only on the handle itself -- the row's own drag starts
+   there, so the rest of the row (and any row below the fold) still scrolls
+   normally under a plain swipe. */
+.setlist-row__handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 30px;
+  flex-shrink: 0;
+  color: var(--ink-soft);
+  cursor: grab;
+  touch-action: none;
+}
+.setlist-row--dragging {
+  opacity: 0.6;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
+  z-index: 2;
+}
+
+/* Floating "prev / next" pair shown bottom-left, mirroring the autoscroll
+   FAB's own bottom-right spot, while a setlist is being played through
+   (js/setlists.js) -- deliberately its own floating control rather than
+   taking over .bottom-nav the way the audio dock's now-playing bar does
+   (see .audio-dock__bar): the two need to coexist (playing a backing
+   track *while* stepping through a setlist is the common case), and only
+   one control can own that nav slot at a time. */
+.setlist-playbar {
+  position: absolute;
+  left: calc(1.1rem + env(safe-area-inset-left));
+  bottom: calc(100% + 0.85rem);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.setlist-playbar__btn {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.setlist-playbar__btn:active { transform: translateY(1px); }
+.setlist-playbar__btn[disabled] { opacity: 0.4; cursor: default; }
+.setlist-playbar__count {
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}

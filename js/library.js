@@ -32,7 +32,10 @@
   const settingsFab = document.getElementById("settings-fab");
   function syncSettingsFab() {
     if (!settingsFab) return;
-    settingsFab.hidden = !searchOverlay.hidden || !detailOverlay.hidden;
+    settingsFab.hidden =
+      !searchOverlay.hidden ||
+      !detailOverlay.hidden ||
+      Boolean(window.GuitarSetlists && window.GuitarSetlists.anyOverlayOpen && window.GuitarSetlists.anyOverlayOpen());
   }
 
   const addBtn = document.getElementById("library-add-btn");
@@ -169,7 +172,11 @@
   // `withFavStar` toggles the little star button on each row (only saved
   // songs in the library list get one -- search results don't, since they
   // aren't saved yet).
-  function renderSongRow(song, { withFavStar }) {
+  // `onOpen` lets a caller outside the plain library list (js/setlists.js's
+  // own song rows) reuse this exact row markup/behaviour but land somewhere
+  // other than the bare openDetail(song) -- e.g. recording where "back"
+  // should return to before opening it.
+  function renderSongRow(song, { withFavStar, onOpen }) {
     const li = document.createElement("li");
     li.className = "song-item";
     li.dataset.id = song.id;
@@ -225,7 +232,7 @@
       li.appendChild(syncedBadge);
     }
 
-    li.addEventListener("click", () => openDetail(song));
+    li.addEventListener("click", () => (onOpen ? onOpen(song) : openDetail(song)));
     return li;
   }
 
@@ -403,7 +410,7 @@
     const now = Date.now();
     const id = `custom:${now}:${Math.random().toString(36).slice(2, 8)}`;
     dropTomb(id);
-    library.push({
+    const entry = {
       id,
       title,
       artist: customArtistInput.value.trim(),
@@ -414,10 +421,17 @@
       favorite: false,
       savedAt: now,
       updatedAt: now,
-    });
+    };
+    library.push(entry);
     commit();
     renderLibraryList();
     closeSearch();
+    // Same hook as the search-result save path (detailSaveBtn above) --
+    // this route saves straight to the library without ever visiting the
+    // detail page, so it needs its own call.
+    if (window.GuitarSetlists && window.GuitarSetlists.notifySongSaved) {
+      window.GuitarSetlists.notifySongSaved(entry, { noDetailPage: true });
+    }
   });
 
   // iTunes returns the same recording once per release it appears on (single,
@@ -633,7 +647,7 @@
     detailLearningBtn.hidden = !isSaved;
   }
 
-  function openDetail(song) {
+  function openDetail(song, opts) {
     const existing = findEntry(song.id);
     const saved = Boolean(existing);
     currentDetailId = song.id;
@@ -686,7 +700,7 @@
     // Lyrics-with-chords sheet (js/songsheet.js). Available for every song,
     // custom ones included -- a custom song is exactly where you'd paste
     // your own sheet.
-    if (window.GuitarSongSheet) window.GuitarSongSheet.open(currentDetailSong);
+    if (window.GuitarSongSheet) window.GuitarSongSheet.open(currentDetailSong, opts);
 
     // Best-effort tempo: if TheAudioDB knows it, show it beside the year and
     // reveal the "open in metronome" button.
@@ -720,7 +734,14 @@
     window.GuitarMetronome.playAtBpm(bpm, null, { autostart: false });
   });
 
-  detailBackBtn.addEventListener("click", closeDetail);
+  detailBackBtn.addEventListener("click", () => {
+    // js/setlists.js owns "back" while a song was opened from a setlist --
+    // it returns to that setlist's own screen instead of the bare library,
+    // and reports true once it's already done so (closing the detail
+    // overlay itself along the way).
+    if (window.GuitarSetlists && window.GuitarSetlists.onDetailBack && window.GuitarSetlists.onDetailBack()) return;
+    closeDetail();
+  });
 
   detailSaveBtn.addEventListener("click", () => {
     if (!currentDetailId) return;
@@ -744,6 +765,12 @@
       commit();
       currentDetailSong = entry;
       updateSaveButton(true);
+      // js/setlists.js listens for this to add a freshly-saved song straight
+      // into whichever setlist the user was building when they went looking
+      // for it via search -- see its pendingSetlistId.
+      if (window.GuitarSetlists && window.GuitarSetlists.notifySongSaved) {
+        window.GuitarSetlists.notifySongSaved(entry);
+      }
     }
     renderLibraryList();
   });
@@ -767,6 +794,7 @@
     btn.addEventListener("click", () => {
       closeSearch();
       closeDetail();
+      if (window.GuitarSetlists && window.GuitarSetlists.closeAll) window.GuitarSetlists.closeAll();
     });
   });
 
@@ -776,6 +804,7 @@
   document.addEventListener("instrumentchange", () => {
     closeSearch();
     closeDetail();
+    if (window.GuitarSetlists && window.GuitarSetlists.closeAll) window.GuitarSetlists.closeAll();
     library = loadSongs(currentInstrument());
     tombstones = loadTombs(currentInstrument());
     renderLibraryList();
@@ -898,7 +927,23 @@
 
   // Exposed for js/sync.js (optional cloud sync) and js/spotify.js /
   // js/backingtrack.js (setSongField).
-  window.GuitarLibrary = { getAllSnapshot, applySnapshot, setSongField, isDetailOpen: () => !detailOverlay.hidden };
+  // openDetail/closeDetail/renderSongRow/openSearch/getSong/sortedLibrary are
+  // reused by js/setlists.js so a setlist's song cards, add-songs picker and
+  // the "open a song from a setlist" flow all go through the exact same
+  // rendering and storage this file already owns, rather than a second copy.
+  window.GuitarLibrary = {
+    getAllSnapshot,
+    applySnapshot,
+    setSongField,
+    isDetailOpen: () => !detailOverlay.hidden,
+    openDetail,
+    closeDetail,
+    renderSongRow,
+    openSearch,
+    getSong: (id) => findEntry(id),
+    sortedLibrary,
+    syncSettingsFab,
+  };
 
   /* ---------- Backup buttons (Settings) ---------- */
   const exportBtn = document.getElementById("export-btn");

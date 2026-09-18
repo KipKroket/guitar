@@ -1189,20 +1189,22 @@
     return n;
   }
 
-  function open(song) {
+  function open(song, opts) {
     if (!song || !song.id) {
       close();
       return;
     }
     const inst = currentInstrument();
-    // Always start collapsed -- the detail page opens showing just the
-    // "Lyrics & chords" bar, above the external Chords/Tabs links.
+    // Always starts collapsed, unless a caller explicitly asks otherwise
+    // (js/setlists.js's "Play setlist" jumps straight to an expanded sheet)
+    // -- the detail page normally opens showing just the "Lyrics & chords"
+    // bar, above the external Chords/Tabs links.
     state = {
       song,
       inst,
       record: loadSheet(inst, song.id),
       adding: false,
-      expanded: false,
+      expanded: !!(opts && opts.expanded),
       fetching: false,
       fetchError: null,
       candidates: null, // search results awaiting a pick, or null
@@ -1211,6 +1213,7 @@
       confirmClearSync: false,
       autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false, menuOpen: false },
       playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
+      showAllChords: false,
     };
     root.hidden = false;
     render();
@@ -1720,6 +1723,34 @@
     /* ---- chord chips + a slot for the tapped chord's diagram ---- */
     const chordSyms = uniqueChords(shown);
     if (chordSyms.length) {
+      const chipsHead = el("div", "songsheet__chipshead");
+      chipsHead.appendChild(el("span", "songsheet__chipshead-label", "Chords"));
+      const allBtn = el("button", "songsheet__btn songsheet__btn--sm", state.showAllChords ? "Hide all" : "Show all");
+      allBtn.type = "button";
+      allBtn.addEventListener("click", () => {
+        state.showAllChords = !state.showAllChords;
+        render();
+      });
+      chipsHead.appendChild(allBtn);
+      panel.appendChild(chipsHead);
+    }
+
+    // "Show all" replaces the one-at-a-time chip+card interaction below with
+    // every chord's diagram laid out at once -- meant for glancing over the
+    // whole progression before playing it, not for the swap picker (that
+    // stays chip-only, one chord at a time).
+    if (chordSyms.length && state.showAllChords) {
+      const grid = el("div", "songsheet__chordgrid");
+      chordSyms.forEach((sym) => {
+        const card = el("div", "mini-chord");
+        grid.appendChild(card);
+        const ok = window.GuitarChords && window.GuitarChords.renderInto
+          ? window.GuitarChords.renderInto(card, sym)
+          : false;
+        if (!ok && !card.textContent) card.textContent = sym;
+      });
+      panel.appendChild(grid);
+    } else if (chordSyms.length) {
       const chips = el("div", "songsheet__chips");
       const card = el("div", "songsheet__chipcard");
       card.hidden = true;

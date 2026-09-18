@@ -127,6 +127,9 @@
         <div class="library__header">
           <h1 class="library__title">Library</h1>
           <div class="library__actions">
+            <button id="setlists-open-btn" class="setlists-open-btn" type="button" aria-label="Setlists">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 6h13M4 12h13M4 18h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="20" cy="6" r="1.6" fill="currentColor"/><circle cx="20" cy="12" r="1.6" fill="currentColor"/></svg>
+            </button>
             <button id="instrument-toggle" class="instrument-switch" type="button" role="switch" aria-checked="false" aria-label="Switch between guitar and piano">
               <span class="instrument-switch__icon instrument-switch__icon--guitar" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="15" height="15">
@@ -233,6 +236,98 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Setlists overview: every saved setlist, plus "new setlist" --
+           js/setlists.js. -->
+      <div class="overlay" id="setlists-overlay" hidden>
+        <div class="overlay__header">
+          <button id="setlists-back" class="overlay__back" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <h1 class="overlay__title">Setlists</h1>
+          <button id="setlists-new-btn" class="add-button" type="button" aria-label="New setlist">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <form id="setlist-new-form" class="custom-song__form" hidden>
+          <input id="setlist-new-name" class="custom-song__input" type="text" placeholder="Setlist name" autocomplete="off" maxlength="60" required>
+          <div class="custom-song__actions">
+            <button type="button" id="setlist-new-cancel" class="custom-song__cancel">Cancel</button>
+            <button type="submit" class="custom-song__save">Create</button>
+          </div>
+        </form>
+
+        <div class="library__empty" id="setlists-empty" hidden>
+          <p>No setlists yet.</p>
+          <p>Tap the + button to make one.</p>
+        </div>
+
+        <ul class="song-list" id="setlists-list"></ul>
+      </div>
+
+      <!-- One setlist's own songs -- js/setlists.js. Mirrors the plain
+           library page (same song cards) but scoped to this setlist's own
+           order, with "Play setlist" and an "Organize" drag-reorder mode. -->
+      <div class="overlay" id="setlist-detail-overlay" hidden>
+        <div class="overlay__header">
+          <button id="setlist-detail-back" class="overlay__back" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <h1 class="overlay__title" id="setlist-detail-title">Setlist</h1>
+          <div class="overlay__header-actions">
+            <button id="setlist-detail-delete-btn" class="overlay__fav" type="button" aria-label="Delete setlist">
+              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M5 7h14M9 7V5.2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7m-8 0 .7 12.2a1 1 0 0 0 1 .8h6.6a1 1 0 0 0 1-.8L17 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="setlist-add-songs-btn" class="add-button" type="button" aria-label="Add songs">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="setlist-detail__actions">
+          <button id="setlist-play-btn" class="songsheet__btn songsheet__btn--lg" type="button">Play setlist</button>
+          <button id="setlist-organize-btn" class="songsheet__btn songsheet__btn--sm" type="button">Organize</button>
+        </div>
+        <p class="setlist-detail__confirm" id="setlist-delete-confirm" hidden>
+          Delete this setlist? The songs themselves stay in your library.
+          <span class="setlist-detail__confirm-actions">
+            <button type="button" id="setlist-delete-yes" class="songsheet__btn songsheet__btn--sm songsheet__btn--danger">Delete</button>
+            <button type="button" id="setlist-delete-no" class="songsheet__btn songsheet__btn--sm">Cancel</button>
+          </span>
+        </p>
+
+        <div class="library__empty" id="setlist-detail-empty" hidden>
+          <p>No songs in this setlist yet.</p>
+          <p>Tap the + button to add some from your library.</p>
+        </div>
+
+        <ul class="song-list" id="setlist-detail-list"></ul>
+      </div>
+
+      <!-- Add existing library songs to a setlist -- js/setlists.js. New
+           songs come via the normal search overlay instead of a second
+           search UI here (see setlist-add-search-btn). -->
+      <div class="overlay" id="setlist-add-overlay" hidden>
+        <div class="overlay__header">
+          <button id="setlist-add-back" class="overlay__back" type="button" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <input id="setlist-add-filter" class="overlay__search-input" type="search" placeholder="Filter your library…" autocomplete="off">
+        </div>
+
+        <button id="setlist-add-search-btn" class="custom-song__toggle" type="button">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m20 20-4.3-4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span>Search for a new song</span>
+        </button>
+
+        <div class="library__empty" id="setlist-add-empty" hidden>
+          <p>Your library is empty.</p>
+          <p>Search for a new song to add it here.</p>
+        </div>
+
+        <ul class="song-list" id="setlist-add-list"></ul>
       </div>
     </section>
 
@@ -424,6 +519,7 @@
 <script src="js/app.js"></script>
 <script src="js/metronome.js"></script>
 <script src="js/library.js"></script>
+<script src="js/setlists.js"></script>
 <script src="js/chords.js"></script>
 <script src="js/chorddetect.js"></script>
 <script src="js/songsheet.js"></script>
