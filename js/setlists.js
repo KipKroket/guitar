@@ -52,7 +52,30 @@
   const addOverlay = document.getElementById("setlist-add-overlay");
   const addBackBtn = document.getElementById("setlist-add-back");
   const addFilterInput = document.getElementById("setlist-add-filter");
-  const addSaveBtn = document.getElementById("setlist-add-save");
+  let saveBarEl = null;
+  function setSaveBar(on) {
+    const nav = document.querySelector(".bottom-nav");
+    if (!nav) return;
+    if (on && !saveBarEl) {
+      saveBarEl = document.createElement("div");
+      saveBarEl.className = "setlist-savebar";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "save-button";
+      btn.textContent = "Save";
+      btn.addEventListener("click", () => {
+        if (openSetlistId && stagedIds) reorderSetlist(openSetlistId, stagedIds);
+        leaveAddSongs();
+      });
+      saveBarEl.appendChild(btn);
+      nav.appendChild(saveBarEl);
+    }
+    if (!on && saveBarEl) {
+      saveBarEl.remove();
+      saveBarEl = null;
+    }
+    nav.classList.toggle("has-savebar", on);
+  }
   const addListEl = document.getElementById("setlist-add-list");
   const addEmptyEl = document.getElementById("setlist-add-empty");
 
@@ -159,6 +182,8 @@
     newForm.hidden = true;
     slDeleteConfirm.hidden = true;
     organizing = false;
+    stagedIds = null;
+    setSaveBar(false);
     openSetlistId = null;
     pendingSetlistId = null;
     returnTarget = null;
@@ -330,7 +355,9 @@
   // scrolls the list (touch-action: pan-y on the row, see CSS).
   function onRowPointerDown(e, setlistId, li) {
     if (e.target.closest(".setlist-row__delete")) return;
-    if (e.pointerType === "mouse") {
+    // The dotted handle on the left grabs at once; elsewhere on the card a
+    // finger has to hold first (a mouse always drags at once).
+    if (e.pointerType === "mouse" || e.target.closest(".setlist-row__handle")) {
       if (e.button === 0) startDrag(e, setlistId, li);
       return;
     }
@@ -521,6 +548,7 @@
     addOverlay.hidden = false;
     addFilterInput.value = "";
     renderAddList(setlistId, "");
+    setSaveBar(true);
     syncSettingsFab();
   }
 
@@ -571,6 +599,7 @@
 
   function leaveAddSongs() {
     stagedIds = null;
+    setSaveBar(false);
     addOverlay.hidden = true;
     slOverlay.hidden = false;
     renderSetlistDetail();
@@ -578,11 +607,6 @@
   }
 
   addBackBtn.addEventListener("click", leaveAddSongs);
-
-  addSaveBtn.addEventListener("click", () => {
-    if (openSetlistId && stagedIds) reorderSetlist(openSetlistId, stagedIds);
-    leaveAddSongs();
-  });
 
   /* ---------------- Play setlist ----------------
      Opens the first song straight into its expanded lyrics/chords view
