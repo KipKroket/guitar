@@ -2477,10 +2477,13 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 30px;
+  width: 40px;
+  align-self: stretch;
+  margin: -0.55rem 0 -0.55rem -0.7rem;
   flex-shrink: 0;
   color: var(--ink-soft);
+  cursor: grab;
+  touch-action: none; /* dragging from the handle starts at once */
 }
 .setlist-row--dragging {
   opacity: 0.6;
