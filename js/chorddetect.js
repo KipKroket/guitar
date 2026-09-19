@@ -25,8 +25,9 @@
 (function () {
   const MIN_HZ = 70; // just under open low E (~82Hz), with headroom
   const MAX_HZ = 1300; // a couple of guitar-range harmonics; cuts off hiss
-  const CHANGE_THRESHOLD = 0.5; // cosine similarity BELOW this = "different from the baseline"
-  const NOISE_FLOOR = 0.02; // this tick's total chroma energy below this = "not playing"
+  const CHANGE_THRESHOLD = 0.85; // cosine similarity BELOW this = "different from the baseline" (0.5 was so strict that e.g. G->C, which share tones, never registered)
+  const SAME_CANDIDATE = 0.85; // a new reading this similar to the pending candidate counts as "still the same candidate"
+  const NOISE_FLOOR = 0.002; // this tick's total chroma energy below this = "not playing"
   const DWELL_MS = 200; // how long a candidate must read consistently different before it counts
   const TICK_MS = 120; // analysis cadence, throttled inside the rAF loop
   const SMOOTH = 0.5; // chroma exponential-smoothing factor (0 = none)
@@ -111,7 +112,11 @@
         this.candidateVec = null;
         return;
       }
-      if (!this.candidateVec) {
+      // A reading that differs from the baseline but ALSO from the pending
+      // candidate is still a moving target (attack transient, chord still
+      // ringing in) -- restart the dwell on it instead of counting it toward
+      // the old candidate.
+      if (!this.candidateVec || cosine(liveVec, this.candidateVec) < SAME_CANDIDATE) {
         this.candidateVec = liveVec;
         this.candidateSince = now;
         return;

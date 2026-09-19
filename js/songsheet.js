@@ -556,6 +556,18 @@
     if (panel) panel.style.transform = "translateY(" + (scrollWritten - targetY) + "px)";
   }
 
+  // Reached the bottom -- stop rather than keep writing scroll positions
+  // that can't go anywhere (which jitters the text). Shared by manual and
+  // synced pacing.
+  function stopIfAtBottom(box, y) {
+    if (y < box.scrollHeight - box.clientHeight - 1) return false;
+    state.autoscroll.on = false;
+    state.autoscroll.menuOpen = false;
+    stopAutoscroll();
+    render();
+    return true;
+  }
+
   function tickManual(box, ts) {
     if (scrollPos == null) {
       scrollPos = box.scrollTop;
@@ -573,14 +585,7 @@
       const dt = (ts - scrollLastTs) / 1000;
       scrollPos += levelToPxPerSec(state.autoscroll.speed) * dt;
       writeScroll(box, scrollPos);
-      if (scrollPos >= box.scrollHeight - box.clientHeight - 1) {
-        // Reached the bottom -- stop rather than sit there doing nothing.
-        state.autoscroll.on = false;
-        state.autoscroll.menuOpen = false;
-        stopAutoscroll();
-        render();
-        return;
-      }
+      if (stopIfAtBottom(box, scrollPos)) return;
     }
     scrollLastTs = ts;
   }
@@ -787,6 +792,7 @@
     if (y != null) {
       scrollPos = y;
       writeScroll(box, y);
+      stopIfAtBottom(box, y);
     }
   }
 
