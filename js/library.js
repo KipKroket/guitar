@@ -885,12 +885,19 @@
     return merged;
   }
 
+  // The backup file holds EVERYTHING: library, setlists, preferences and the
+  // chord/lyric sheets (the file only ever lives on the user's own device, so
+  // the copyright reason for keeping sheets out of the cloud doesn't apply).
+  // format 1 files (library only) still import fine.
   function exportData() {
-    return JSON.stringify(
-      { app: "guitar", format: 1, exportedAt: Date.now(), libraries: getAllSnapshot() },
-      null,
-      2
-    );
+    const ud = window.GuitarUserData;
+    const out = { app: "guitar", format: 2, exportedAt: Date.now(), libraries: getAllSnapshot() };
+    if (ud) {
+      out.setlists = ud.getSetlists();
+      out.settings = ud.getSettings();
+      out.sheets = ud.getSheets();
+    }
+    return JSON.stringify(out, null, 2);
   }
 
   // Takes the parsed contents of a backup file and merges it in. Throws if
@@ -899,7 +906,14 @@
     if (!obj || obj.app !== "guitar" || !obj.libraries || typeof obj.libraries !== "object") {
       throw new Error("Not a Guitar backup file.");
     }
-    return applySnapshot(obj.libraries);
+    const result = { merged: applySnapshot(obj.libraries), setlists: 0, sheets: 0, settingsChanged: [] };
+    const ud = window.GuitarUserData;
+    if (ud) {
+      result.setlists = ud.applySetlists(obj.setlists);
+      result.sheets = ud.applySheets(obj.sheets);
+      result.settingsChanged = ud.applySettings(obj.settings);
+    }
+    return result;
   }
 
   function countSongs(snap) {
@@ -918,6 +932,7 @@
   window.GuitarLibrary = {
     getAllSnapshot,
     applySnapshot,
+    mergeSnapshots,
     setSongField,
     isDetailOpen: () => !detailOverlay.hidden,
     openDetail,
@@ -970,13 +985,19 @@
       reader.onload = () => {
         try {
           const before = countSongs(getAllSnapshot());
-          importData(JSON.parse(reader.result));
+          const r = importData(JSON.parse(reader.result));
           const added = countSongs(getAllSnapshot()) - before;
-          setBackupStatus(
-            added > 0
-              ? `Merged in — ${added} new song${added === 1 ? "" : "s"}.`
-              : "Merged in — nothing new to add."
-          );
+          const parts = [];
+          if (added > 0) parts.push(`${added} new song${added === 1 ? "" : "s"}`);
+          if (r.setlists > 0) parts.push(`${r.setlists} setlist${r.setlists === 1 ? "" : "s"}`);
+          if (r.sheets > 0) parts.push(`${r.sheets} chord sheet${r.sheets === 1 ? "" : "s"}`);
+          let msg = parts.length ? "Merged in — " + parts.join(", ") + "." : "Merged in — nothing new to add.";
+          if (r.settingsChanged.length) {
+            setBackupStatus(msg + " Settings restored — reloading…");
+            setTimeout(() => location.reload(), 1200);
+          } else {
+            setBackupStatus(msg);
+          }
         } catch (err) {
           setBackupStatus("Couldn't import: " + err.message, true);
         }

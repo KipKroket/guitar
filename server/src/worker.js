@@ -3,7 +3,7 @@
 // Endpoints (all POST, JSON in / JSON out):
 //   /register  { username, passcode }        -> { token }        409 if taken
 //   /login     { username, passcode }        -> { token }        401 / 429
-//   /sync      { token, libraries }          -> { libraries }     401
+//   /sync      { token, libraries, extras? } -> { libraries, extras }  401
 //   /logout    { token }                     -> { ok: true }
 //   /song      { artist, title }             -> { candidates: [...] }   429 / 502
 //              { url }                       -> { raw, meta, source, url }   429 / 502
@@ -129,7 +129,7 @@ async function login(env, { username, passcode }) {
   return json({ token });
 }
 
-async function sync(env, { token, libraries }) {
+async function sync(env, { token, libraries, extras }) {
   const u = await userForToken(env, token);
   if (!u) return json({ error: "Not signed in" }, 401);
 
@@ -147,11 +147,46 @@ async function sync(env, { token, libraries }) {
     merged[inst] = mergeSnapshots(cleanSnap(server[inst]), cleanSnap(incoming[inst]));
   }
 
+  // Setlists + preferences ride along in the same JSON blob, under "extras".
+  // An older client sends none; then the stored copy is kept and returned.
+  merged.extras = mergeExtras(server.extras, extras);
+
   await env.DB.prepare("UPDATE users SET libraries = ?, updated_at = ? WHERE username = ?")
     .bind(JSON.stringify(merged), Date.now(), u)
     .run();
 
-  return json({ libraries: merged });
+  const { extras: mergedExtras, ...libs } = merged;
+  return json({ libraries: libs, extras: mergedExtras });
+}
+
+// extras = { setlists: { guitar:{songs,tombstones}, piano:{...} },
+//            settings: { "<key>": { v: "<string>", ts: <ms> } } }
+// Setlists merge exactly like song libraries (rows are setlists). Settings
+// are last-write-wins per key; input is size-capped since it's client data.
+const MAX_SETTINGS = 50;
+function cleanSettings(s) {
+  const out = {};
+  if (!s || typeof s !== "object") return out;
+  for (const k of Object.keys(s).slice(0, MAX_SETTINGS)) {
+    const e = s[k];
+    if (k.length > 64 || !e || typeof e.v !== "string" || e.v.length > 200 || !(e.ts > 0)) continue;
+    out[k] = { v: e.v, ts: e.ts };
+  }
+  return out;
+}
+function mergeExtras(server, incoming) {
+  server = server && typeof server === "object" ? server : {};
+  incoming = incoming && typeof incoming === "object" ? incoming : {};
+  const sSet = server.setlists && typeof server.setlists === "object" ? server.setlists : {};
+  const iSet = incoming.setlists && typeof incoming.setlists === "object" ? incoming.setlists : {};
+  const setlists = {};
+  for (const inst of INSTRUMENTS) setlists[inst] = mergeSnapshots(cleanSnap(sSet[inst]), cleanSnap(iSet[inst]));
+  const settings = cleanSettings(server.settings);
+  const inSettings = cleanSettings(incoming.settings);
+  for (const k of Object.keys(inSettings)) {
+    if (!settings[k] || inSettings[k].ts > settings[k].ts) settings[k] = inSettings[k];
+  }
+  return { setlists, settings };
 }
 
 async function logout(env, { token }) {

@@ -104,6 +104,7 @@
     } catch (e) {
       /* quota -- nothing sensible to do here for a personal tool */
     }
+    document.dispatchEvent(new CustomEvent("userdatachange")); // cloud sync
   }
   function genId() {
     return "sl_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -118,7 +119,17 @@
     writeSetlists(list);
     return entry;
   }
+  // Deletions leave a tombstone (like js/library.js) so cloud sync / a backup
+  // file can't resurrect the setlist from another copy.
   function deleteSetlist(id) {
+    const tombKey = currentInstrument() + "-setlists-tomb";
+    try {
+      const tombs = JSON.parse(localStorage.getItem(tombKey) || "[]").filter((t) => t && t.id !== id);
+      tombs.push({ id, deletedAt: Date.now() });
+      localStorage.setItem(tombKey, JSON.stringify(tombs));
+    } catch (e) {
+      /* corrupt/full storage -- deletion itself still goes through */
+    }
     writeSetlists(readSetlists().filter((s) => s.id !== id));
   }
   function addSongToSetlist(setlistId, songId) {
@@ -754,6 +765,15 @@
     else if (target.type === "setlist-add") openAddSongs(target.setlistId);
     return true;
   }
+
+  // A sync or import may have changed the lists under an open overview.
+  document.addEventListener("setlistsapplied", () => {
+    if (!setlistsOverlay.hidden) renderSetlistsList();
+    else if (!slOverlay.hidden) {
+      if (getSetlist(openSetlistId)) renderSetlistDetail();
+      else openSetlistsOverview();
+    }
+  });
 
   window.GuitarSetlists = { notifySongSaved, onDetailBack, anyOverlayOpen, closeAll };
 })();

@@ -5,6 +5,10 @@
 // a username + 6-digit passcode signs you in, and your library is merged
 // with a copy kept by a tiny Cloudflare Worker. No email, no confirmation.
 //
+// Besides the library, the account also carries setlists and preferences
+// (js/userdata.js). Chord/lyric sheets are the one thing that stays off the
+// server (copyright) -- they only travel in the backup file.
+//
 // The passcode is never stored on the device -- the server returns an opaque
 // token, and that is what the app keeps. Losing it (cleared storage, new
 // phone) just means signing in once more; the library itself is safe in the
@@ -102,6 +106,9 @@
       const { token } = await api(kind === "register" ? "/register" : "/login", creds);
       account = { username: creds.username, token: token };
       saveAccount(account);
+      // Signing in on another device: the account's preferences should win
+      // over whatever defaults this device wrote on its own.
+      if (kind === "login" && window.GuitarUserData) window.GuitarUserData.resetSettingTimestamps();
       passInput.value = "";
       render();
       setStatus(statusEl, "");
@@ -123,11 +130,26 @@
     syncing = true;
     setStatus(syncStatusEl, "Syncing…");
     try {
+      const ud = window.GuitarUserData;
       const local = window.GuitarLibrary.getAllSnapshot();
-      const { libraries } = await api("/sync", { token: account.token, libraries: local });
+      const extras = ud ? { setlists: ud.getSetlists(), settings: ud.getSettings() } : undefined;
+      const { libraries, extras: back } = await api("/sync", { token: account.token, libraries: local, extras: extras });
       if (libraries) window.GuitarLibrary.applySnapshot(libraries);
+      let settingsChanged = [];
+      if (ud && back) {
+        ud.applySetlists(back.setlists);
+        settingsChanged = ud.applySettings(back.settings);
+      }
       const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      setStatus(syncStatusEl, "Synced at " + t);
+      if (settingsChanged.length && force) {
+        // Preferences are read at startup -- reload once so they take effect.
+        setStatus(syncStatusEl, "Settings restored — reloading…");
+        setTimeout(() => location.reload(), 800);
+      } else if (settingsChanged.length) {
+        setStatus(syncStatusEl, "Synced at " + t + " — settings apply on next launch");
+      } else {
+        setStatus(syncStatusEl, "Synced at " + t);
+      }
     } catch (err) {
       if (err.status === 401) {
         account = null;
@@ -169,6 +191,10 @@
 
   // Any local change (add / remove / favourite) schedules a debounced push.
   document.addEventListener("librarychange", () => {
+    if (account) scheduleSync();
+  });
+  // Same for setlists and preferences (js/userdata.js, js/setlists.js).
+  document.addEventListener("userdatachange", () => {
     if (account) scheduleSync();
   });
   // Reconnecting, or coming back to the app, is a good moment to pull.

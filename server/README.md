@@ -26,6 +26,15 @@ cache.
    → JSON with a `raw` chord sheet (or `{"error":...,"tried":[...]}` if both
    sources were blocked — then the app falls back to the paste box).
 
+## Shipping the setlists + settings sync update (Build 54)
+
+`/sync` now also carries `extras` (setlists per instrument, and a small set of
+preferences) and stores them in the same `users.libraries` JSON blob under
+`extras`. **No schema change.** Only the code needs deploying: Workers & Pages
+→ `guitar-sync` → **Edit code** → replace with `src/worker.js` → **Deploy**.
+Deploy this before (or together with) the app update; an old Worker simply
+ignores `extras`, so nothing breaks in the meantime, but nothing new syncs.
+
 ## Shipping the jam "mark line" update to the live Worker
 
 Adds a `mark_line`/`mark_ts` pair to `jam_sessions` so a host can briefly
