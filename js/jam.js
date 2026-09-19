@@ -16,9 +16,13 @@
   const API_BASE = "https://guitar-sync.julianleendertse.workers.dev/jam";
   const HOST_TICK_MS = 800;
   const FOLLOW_POLL_MS = 1000;
-  // sessionStorage, not localStorage -- a jam is a one-sitting thing, and a
-  // stale "still hosting"/"still following" flag lingering into an
-  // unrelated future app open would be worse than just starting fresh.
+  // localStorage, not sessionStorage -- sessionStorage doesn't survive the
+  // installed app being closed/killed, which used to silently end a jam the
+  // moment the host (or a follower) restarted the app, e.g. to recover from
+  // a Spotify hiccup. To keep a stale "still hosting" flag from lingering
+  // into an unrelated future app open, a saved session only counts as
+  // resumable if it was last active within SESSION_MAX_IDLE_MS.
+  const SESSION_MAX_IDLE_MS = 10 * 60 * 1000;
   const SESSION_KEY = "guitar-jam-session";
 
   let session = loadSession(); // {role:'host', code, hostToken} | {role:'follower', code, followerId} | null
@@ -57,6 +61,7 @@
   let followerTargetTs = null; // performance.now() timestamp the target line was last set
   let followerRenderedLine = null;
   let followerVelocity = 0; // estimated host scroll speed, in lines/sec
+  let followerPlayIndex = null; // last play-along step index the follower centred on
   const FOLLOWER_MAX_VELOCITY = 8; // lines/sec clamp -- guards against a noisy poll spiking the estimate
   // Whether the host's autoscroll is currently on (see songsheet.js
   // getJamSnapshot() -- it only reports a position while autoscroll.on is
@@ -80,15 +85,25 @@
 
   function loadSession() {
     try {
-      return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+      if (!s || !s.at || Date.now() - s.at > SESSION_MAX_IDLE_MS) return null;
+      return s;
     } catch (e) {
       return null;
     }
   }
   function saveSession(s) {
-    session = s;
-    if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    else sessionStorage.removeItem(SESSION_KEY);
+    session = s ? { ...s, at: Date.now() } : null;
+    try {
+      if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      else localStorage.removeItem(SESSION_KEY);
+    } catch (e) {
+      /* storage blocked -- the jam just won't survive a restart */
+    }
+  }
+  // Refreshes the "last active" stamp after a successful host/follow tick.
+  function touchSession() {
+    if (session) saveSession(session);
   }
 
   function randomId() {
@@ -166,6 +181,7 @@
     try {
       const data = await api("/update", payload);
       hostParticipantCount = data.participantCount || 0;
+      touchSession();
       renderIsland();
       renderSettings();
     } catch (err) {
@@ -306,6 +322,7 @@
     try {
       const data = await api("/poll", { code: session.code, followerId: session.followerId });
       updateFollowerView(data);
+      touchSession();
       renderIsland();
     } catch (err) {
       if (err.status === 404) {
@@ -426,6 +443,7 @@
     followerRenderedLine = null;
     followerVelocity = 0;
     followerScrollActive = false;
+    followerPlayIndex = null;
   }
 
   function updateScrollFabUI() {
@@ -481,6 +499,7 @@
       followerRenderedLine = null;
       followerVelocity = 0;
       followerLastMarkTs = null;
+      followerPlayIndex = null;
     }
 
     applyFollowerHighlight(data);
@@ -611,6 +630,16 @@
     return topF + (topC - topF) * frac - box.clientHeight * 0.3;
   }
 
+  function centerFollowerPlayAlong() {
+    const chordEl = followerEls && followerEls.body.querySelector(".ss-seg__chord--playalong");
+    if (!chordEl) return;
+    const box = followerEls.body;
+    const boxRect = box.getBoundingClientRect();
+    const r = chordEl.getBoundingClientRect();
+    const y = box.scrollTop + (r.top - boxRect.top) + r.height / 2 - box.clientHeight / 2;
+    box.scrollTo({ top: Math.max(0, Math.round(y)), behavior: "smooth" });
+  }
+
   // Records what the latest poll says the host is doing -- the actual
   // scrolling happens continuously in followerScrollFrame() below, not
   // here, so a poll landing doesn't itself cause a visible step. Also
@@ -619,9 +648,23 @@
   // between polls instead of sitting still once it catches up to a stale
   // target (see the comment above followerScrollRAF's declaration).
   function applyFollowerScroll(data) {
+    const playAlong = data.mode === "playalong";
     const active = data.mode === "timestamps" || data.mode === "autoscroll";
-    followerScrollActive = active;
+    followerScrollActive = active || playAlong;
     updateScrollFabUI();
+    if (playAlong) {
+      // Play-along follows the host's chord step, not a scroll position:
+      // keep the live chord mid-screen, and make sure the line-based glide
+      // in followerScrollFrame() stays idle so it doesn't fight this.
+      followerTargetLine = null;
+      followerRenderedLine = null;
+      followerVelocity = 0;
+      const idx = data.pos ? data.pos.index : null;
+      if (autoFollow && idx != null && idx !== followerPlayIndex) centerFollowerPlayAlong();
+      followerPlayIndex = idx;
+      return;
+    }
+    followerPlayIndex = null;
     if (!active || !data.pos || data.pos.line == null) {
       followerVelocity = 0;
       return;

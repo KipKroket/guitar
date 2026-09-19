@@ -25,11 +25,19 @@
 (function () {
   const MIN_HZ = 70; // just under open low E (~82Hz), with headroom
   const MAX_HZ = 1300; // a couple of guitar-range harmonics; cuts off hiss
-  const CHANGE_THRESHOLD = 0.85; // cosine similarity BELOW this = "different from the baseline" (0.5 was so strict that e.g. G->C, which share tones, never registered)
-  const SAME_CANDIDATE = 0.85; // a new reading this similar to the pending candidate counts as "still the same candidate"
+  const CHANGE_THRESHOLD = 0.75; // cosine similarity BELOW this = "different from the baseline" (0.5 missed chords sharing tones, 0.85 fired on re-strums of the same chord)
+  const SAME_CANDIDATE = 0.8; // a new reading this similar to the pending candidate counts as "still the same candidate"
   const NOISE_FLOOR = 0.002; // this tick's total chroma energy below this = "not playing"
-  const DWELL_MS = 200; // how long a candidate must read consistently different before it counts
+  const DWELL_MS = 350; // how long a candidate must read consistently different before it counts
   const TICK_MS = 120; // analysis cadence, throttled inside the rAF loop
+  const MIN_ADVANCE_MS = 800; // after any advance, ignore further changes for this long (a strum's tail isn't a new chord)
+  // Re-attack detection, for a step whose chord is the SAME as the previous
+  // one (Em Em Em ...): the sound doesn't change, so the only signal is the
+  // player letting it ring out / muting and then striking again.
+  const DIP_RATIO = 0.35; // energy below this fraction of the recent peak = "let it ring out"
+  const DIP_MIN_MS = 150; // ...for at least this long
+  const REATTACK_RATIO = 2.5; // then energy rising to this multiple of the dip's floor = a new strike
+  const PEAK_DECAY = 0.97; // per tick, so the "recent peak" fades over a few seconds
   const SMOOTH = 0.5; // chroma exponential-smoothing factor (0 = none)
 
   function normalise(vec) {
@@ -46,27 +54,9 @@
     return dot;
   }
 
-  // Consecutive repeats of the same chord (held across two lines, say)
-  // collapse into one step -- matches js/songsheet.js's buildChordSteps(),
-  // so the two stay index-for-index in sync. Idempotent, so it's harmless
-  // if the caller already collapsed its own list before handing it over.
-  // Still needed here even though this detector no longer looks at chord
-  // *symbols* at all: without it, two consecutive identical-chord steps
-  // would be unreachable -- nothing about the actual sound changes between
-  // them, so a "does the sound differ" detector could never tell the song
-  // moved on to the second one.
-  function collapseSteps(syms) {
-    const out = [];
-    syms.forEach((sym) => {
-      if (out.length && out[out.length - 1] === sym) return;
-      out.push(sym);
-    });
-    return out;
-  }
-
   class PlayAlongDetector {
     constructor(syms) {
-      this.steps = collapseSteps(syms || []);
+      this.steps = (syms || []).slice();
       this.index = 0;
       // The settled sound to compare new readings against -- null until
       // the first real (non-silent) reading establishes one.
@@ -80,6 +70,30 @@
       this.listening = false;
       this.onStep = null;
       this._lastTick = 0;
+      this._resetEnergy();
+      this.lastAdvance = 0;
+    }
+
+    _resetEnergy() {
+      this.peak = 0;
+      this.dipSince = null;
+      this.dipMin = Infinity;
+    }
+
+    // True when the NEXT step is the same chord as the current one, i.e.
+    // the sound isn't expected to change at all.
+    _nextIsRepeat() {
+      return this.index < this.steps.length - 1 && this.steps[this.index + 1] === this.steps[this.index];
+    }
+
+    _advance(now, liveVec) {
+      if (this.index >= this.steps.length - 1) return;
+      this.index += 1;
+      this.lastAdvance = now;
+      this.baseline = liveVec || this.baseline;
+      this.candidateVec = null;
+      this._resetEnergy();
+      if (this.onStep) this.onStep(this.index);
     }
 
     stepCount() {
@@ -98,11 +112,40 @@
       this.index = Math.max(0, Math.min(this.steps.length - 1, index));
       this.baseline = null;
       this.candidateVec = null;
+      this._resetEnergy();
+      this.lastAdvance = performance.now();
+    }
+
+    // Repeated-chord steps: advance on a fresh strike after the previous
+    // one was left to ring out. Continuous strumming never dips, so a chord
+    // strummed over several seconds still counts once.
+    _feedEnergy(now, energy) {
+      this.peak = Math.max(energy, this.peak * PEAK_DECAY);
+      if (energy < this.peak * DIP_RATIO || energy < NOISE_FLOOR) {
+        if (this.dipSince == null) this.dipSince = now;
+        this.dipMin = Math.min(this.dipMin, energy);
+        return;
+      }
+      if (this.dipSince != null) {
+        const dipped = now - this.dipSince >= DIP_MIN_MS;
+        const struck = energy > Math.max(NOISE_FLOOR * 2, this.dipMin * REATTACK_RATIO);
+        this.dipSince = null;
+        this.dipMin = Infinity;
+        if (dipped && struck && now - this.lastAdvance >= MIN_ADVANCE_MS && this._nextIsRepeat()) {
+          this._advance(now, null);
+        }
+      }
     }
 
     _feed(now, liveVec) {
       if (!this.baseline) {
         this.baseline = liveVec;
+        this.candidateVec = null;
+        return;
+      }
+      if (this._nextIsRepeat()) {
+        // Sound isn't supposed to change -- ignore it here and
+        // leave advancing to _feedEnergy()'s re-attack detection.
         this.candidateVec = null;
         return;
       }
@@ -124,10 +167,7 @@
       if (now - this.candidateSince >= DWELL_MS) {
         this.baseline = liveVec;
         this.candidateVec = null;
-        if (this.index < this.steps.length - 1) {
-          this.index += 1;
-          if (this.onStep) this.onStep(this.index);
-        }
+        if (now - this.lastAdvance >= MIN_ADVANCE_MS) this._advance(now, liveVec);
       }
     }
 
@@ -195,6 +235,7 @@
       // alone rather than feeding silence in as "different", so a pause
       // between chords doesn't itself register as a change once playing
       // resumes.
+      if (this._nextIsRepeat()) this._feedEnergy(now, energy);
       if (energy < NOISE_FLOOR) return;
       this._feed(now, normalise(this.chroma));
     }

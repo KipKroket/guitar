@@ -146,13 +146,28 @@
   function loadSdk() {
     if (window.Spotify) return Promise.resolve(window.Spotify);
     if (sdkPromise) return sdkPromise;
-    sdkPromise = new Promise((resolve) => {
-      window.onSpotifyWebPlaybackSDKReady = () => resolve(window.Spotify);
+    const attempt = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Couldn't load Spotify.")), 15000);
+      window.onSpotifyWebPlaybackSDKReady = () => {
+        clearTimeout(timer);
+        resolve(window.Spotify);
+      };
       const s = document.createElement("script");
       s.src = "https://sdk.scdn.co/spotify-player.js";
+      s.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("Couldn't load Spotify."));
+      };
       document.head.appendChild(s);
     });
-    return sdkPromise;
+    // A failed load (offline, blocked, timed out) must not stay cached, or
+    // every later tap replays the same failure until the app is restarted.
+    attempt.catch(() => {
+      if (sdkPromise === attempt) sdkPromise = null;
+      document.querySelectorAll('script[src*="sdk.scdn.co"]').forEach((n) => n.remove());
+    });
+    sdkPromise = attempt;
+    return attempt;
   }
 
   let player = null;
@@ -231,15 +246,44 @@
           player.addListener("account_error", () =>
             reject(new Error("This only works with Spotify Premium."))
           );
+          // "ready" never arriving (dead websocket, SDK stuck) used to hang
+          // on "Connecting…" forever -- treat it as a failed attempt.
+          const readyTimer = setTimeout(() => reject(new Error("Couldn't connect to Spotify.")), 15000);
+          player.addListener("ready", () => clearTimeout(readyTimer));
           player.connect();
         })
     );
     attempt.catch(() => {
-      if (playerPromise === attempt) playerPromise = null;
+      if (playerPromise === attempt) resetPlayer();
     });
     playerPromise = attempt;
     return playerPromise;
   }
+
+  // Throws away the current SDK player entirely, so the next ensurePlayer()
+  // builds a fresh one. Reconnecting the *same* player object after the
+  // connection has gone bad is what used to leave "Spotify couldn't
+  // connect" stuck until the whole app was restarted.
+  function resetPlayer() {
+    if (player) {
+      try {
+        player.disconnect();
+      } catch (e) {
+        /* already gone */
+      }
+    }
+    player = null;
+    deviceId = null;
+    playerPromise = null;
+    lastState = null;
+  }
+
+  // A backgrounded iOS app routinely loses the SDK's connection; nudge it
+  // back the moment the app is visible again instead of waiting for the
+  // next play tap to discover it.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && player && !deviceId) player.connect();
+  });
 
   function waitForDevice() {
     if (deviceId) return Promise.resolve(deviceId);
@@ -280,9 +324,12 @@
     return track.id;
   }
 
-  async function playSong(song) {
-    const token = await getValidToken();
-    if (!token) throw new Error("not-logged-in");
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // Connects (fresh player if needed) and returns a usable device_id.
+  async function readyDevice() {
     await ensurePlayer();
     // The device the SDK registered can have gone stale since (idle
     // timeout, a backgrounded tab losing its connection, ...) without us
@@ -292,20 +339,50 @@
     // whatever it already had playing. Reconnecting first is what actually
     // prevents that "plays a random already-going track" behaviour.
     if (!deviceId) await waitForDevice();
+    return deviceId;
+  }
+
+  async function playSong(song) {
+    if (!(await getValidToken())) throw new Error("not-logged-in");
+    // Whatever the previous song left behind must not be mistaken for this
+    // one's state (see the verification below and renderState()).
+    lastState = null;
+    let device;
+    try {
+      device = await readyDevice();
+    } catch (err) {
+      // One clean retry on a brand-new player before giving up.
+      resetPlayer();
+      device = await readyDevice();
+    }
     const trackId = await resolveTrackId(song);
     if (!trackId) throw new Error("Couldn't find this song on Spotify.");
     currentTrackId = trackId;
-    const res = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
-      method: "PUT",
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({ uris: ["spotify:track:" + trackId] }),
-    });
-    if (!res.ok && res.status !== 204) {
-      // A 404 here means Spotify no longer recognises this device_id at
-      // all -- drop it so the *next* attempt reconnects up front instead
-      // of repeating the same failing request against a dead id.
-      if (res.status === 404) deviceId = null;
-      throw new Error("Playback failed.");
+
+    // Spotify's /play can return 204 while the device keeps (or resumes)
+    // the previous track -- so after each request, check what the player
+    // actually loaded and re-send if it's not this song.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const token = await getValidToken();
+      if (!token) throw new Error("not-logged-in");
+      const res = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + device, {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ uris: ["spotify:track:" + trackId] }),
+      });
+      if (!res.ok && res.status !== 204) {
+        // A 404 here means Spotify no longer recognises this device_id at
+        // all -- drop the player so the next attempt reconnects from scratch
+        // instead of repeating the same failing request against a dead id.
+        if (res.status === 404) resetPlayer();
+        throw new Error("Playback failed.");
+      }
+      await sleep(1200);
+      if (currentTrackId !== trackId) return; // user already moved on to another song
+      const st = player && (await player.getCurrentState().catch(() => null));
+      const cur = st && st.track_window && st.track_window.current_track;
+      if (!cur) continue;
+      if (cur.id === trackId || (cur.linked_from && cur.linked_from.id === trackId)) return;
     }
   }
 
@@ -438,6 +515,11 @@
     function renderState(state) {
       if (!state) return;
       if (autoPauseArmed && !state.paused) {
+        // Only the track we actually asked for counts -- a leftover state
+        // from the previous song must not use up the armed auto-pause
+        // (playSong() re-sends /play until the right track is loaded).
+        const cur = state.track_window && state.track_window.current_track;
+        if (!cur || (cur.id !== currentTrackId && !(cur.linked_from && cur.linked_from.id === currentTrackId))) return;
         autoPauseArmed = false;
         pause();
         return; // the pause() call re-fires this listener with paused:true

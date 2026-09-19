@@ -1038,13 +1038,10 @@
      read); entering one turns the others off, same precedent sync mode
      already sets for autoscroll. ---- */
 
-  // Flattens the chord progression into ordered "steps" for play-along --
-  // consecutive repeats of the same chord (held across two lines, say)
-  // collapse into one step, same as js/chorddetect.js does internally, so
-  // the two stay index-for-index in sync. Each step remembers every
-  // occurrence (line + position within that line) it was collapsed from,
-  // so all of them can be highlighted while that step is current -- see
-  // the stepKey lookup in renderLine().
+  // Flattens the chord progression into ordered "steps" for play-along,
+  // one per written chord. Each step remembers its occurrence (line +
+  // position within that line), so it can be highlighted while current --
+  // see the stepKey lookup in renderLine().
   function buildChordSteps(shown) {
     const steps = [];
     let lineIdx = 0;
@@ -1056,9 +1053,10 @@
           .sort((a, b) => a.index - b.index)
           .filter((c) => /^[A-G]/.test(c.sym.trim()))
           .forEach((c, order) => {
-            const last = steps[steps.length - 1];
-            if (last && last.sym === c.sym) last.occurrences.push({ lineIdx, order });
-            else steps.push({ sym: c.sym, occurrences: [{ lineIdx, order }] });
+            // One step per written chord, repeats included -- "Em Em Em"
+            // means three plays, and the detector needs each of them to be
+            // played (see js/chorddetect.js's re-attack handling).
+            steps.push({ sym: c.sym, occurrences: [{ lineIdx, order }] });
           });
         lineIdx += 1;
       });
@@ -1074,6 +1072,24 @@
     state.playAlong.steps = null;
     state.playAlong.index = 0;
     state.playAlong.error = null;
+  }
+
+  // Keeps the live play-along chord roughly mid-screen so the last few
+  // chords stay visible above it (for when the detector runs ahead) and the
+  // next ones below. Driven purely by which chord step we're on -- fully
+  // independent of autoscroll/timestamps. Runs after render() (which
+  // rebuilds the chord elements) so the highlight class is already applied.
+  function centerPlayAlongChord() {
+    if (!state || !state.playAlong.on || !panel) return;
+    const chordEl = panel.querySelector(".ss-seg__chord--playalong");
+    if (!chordEl) return;
+    const box = scrollContainer();
+    const boxRect = box.getBoundingClientRect();
+    const r = chordEl.getBoundingClientRect();
+    const y = box.scrollTop + (r.top - boxRect.top) + r.height / 2 - box.clientHeight / 2;
+    const top = Math.max(0, Math.round(y));
+    if (box.scrollTo) box.scrollTo({ top, behavior: "smooth" });
+    else box.scrollTop = top;
   }
 
   async function startPlayAlong() {
@@ -1097,6 +1113,7 @@
     state.playAlong.error = null;
     state.playAlong.on = true; // optimistic -- render() shows "listening…" while getUserMedia resolves
     render();
+    centerPlayAlongChord();
 
     if (!window.PlayAlongEngine) {
       state.playAlong.on = false;
@@ -1111,6 +1128,7 @@
         if (!state || !state.playAlong.on || state.playAlong.detector !== detector) return;
         state.playAlong.index = newIndex;
         render();
+        centerPlayAlongChord();
       });
     } catch (err) {
       console.error("Play along mic error:", err);
@@ -1150,6 +1168,7 @@
     if (state.playAlong.detector) state.playAlong.detector.jumpTo(target);
     state.playAlong.index = target;
     render();
+    centerPlayAlongChord();
   }
 
   /* ---- Floating autoscroll control -------------------------------------
