@@ -23,93 +23,76 @@ function freqToNote(frequency) {
 
 // Pitch detector: McLeod Pitch Method (MPM) on the Normalised Square
 // Difference Function (NSDF), operating on a Float32Array buffer.
-// Returns frequency in Hz, or -1 if no clear pitch found.
+// Returns { freq, clarity, rms }; freq is -1 when there is no clear pitch.
 //
-// This replaced a plain autocorrelation peak-picker (ACF2+). That detector
-// had a systematic *sharp* bias that grew as the note got lower -- an
-// in-tune low E read about +10 cents, low A about +8, D about +6 -- because
-// a short 2048-sample window only holds a few periods of a bass note and
-// the broad autocorrelation peak gets pulled toward zero lag. The practical
-// effect was severe: a perfectly tuned E/A/D string sat permanently just
-// outside the +/-5-cent confirm window, so the tuner would flash "almost
-// there" forever and never advance to the next string, while an actually
-// flat string could read close enough to get wrongly confirmed. The NSDF
-// is self-normalising, so its peak lands on the true period with well under
-// a cent of bias no matter how few periods are in the window, and the
-// height of that peak (0..1, the "clarity") is a dependable gate for
-// "is this a pitched sound at all" -- far better than a bare RMS threshold.
+// Build 55 rework -- the old version ran on the raw 48 kHz mic signal with a
+// 2048-sample (~43 ms) window. Simulated plucks through that exact code showed
+// a per-frame spread of ~3 cents with 12-30% of frames more than 3 cents off,
+// even on a perfectly steady string: broadband mic noise and the pick/string
+// hiss land straight in the NSDF, and the weak tail of a decaying note
+// wandered +/-5-10 cents while still passing the 0.5 clarity gate. That is
+// the "every pluck reads a bit different" effect. Now:
+//   * the signal is band-passed upstream (Web Audio biquads tracking the
+//     target string, ~1.5x-6x its fundamental -- see BANDPASS_* below),
+//     which strips the noise, the fundamental itself and the high partials;
+//   * it is then decimated here (48k -> 12k), which makes a 4096-sample
+//     (~85 ms, 7+ periods of low E) window *cheaper* than the old 2048 one;
+//   * clarity is interpolated at the peak and returned, so the caller can
+//     demand a confident reading instead of a bare "some period exists".
+// Same simulation afterwards: spread ~0.2-0.3 cents, 0% of frames >3 cents off.
+// On real recordings (Juul's guitar, iPhone mic, Sept 2026) the within-note
+// spread on A/D/G went from ~2.5 cents to ~0.5-1.2 cents.
 const MPM_FMIN = 60;          // Hz -- below the lowest string we ever target (73 Hz, drop/open tunings)
 const MPM_FMAX = 440;         // Hz -- above the highest (330 Hz) with headroom
-const MPM_CLARITY_MIN = 0.5;  // reject noise, room tone, the pick "thunk" -- anything without a real period
+const MPM_CLARITY_MIN = 0.8;  // confident, clean period only (was 0.5 -- let noisy decay tails through)
 const MPM_PEAK_RATIO = 0.9;   // the first NSDF hump reaching this fraction of the tallest hump wins
                               // (this is what rejects octave-down / sub-harmonic locks)
-const MPM_RMS_GATE = 0.006;   // was 0.01 on the old detector -- lowered so a string that has
-                              // already decayed partway through its ring still registers
+const MPM_RMS_GATE = 0.002;   // measured after the low-pass, which removes most of the energy of a
+                              // bright pluck -- clarity is the real "is it a note" gate now
+const DECIMATE_TARGET_RATE = 12000; // Hz -- plenty for <=1 kHz content after the low-pass
 
-function mpmDetect(buffer, sampleRate) {
-  const SIZE = buffer.length;
+function mpmDetect(input, inputRate) {
+  const D = Math.max(1, Math.round(inputRate / DECIMATE_TARGET_RATE));
+  const SIZE = Math.floor(input.length / D);
+  const sampleRate = inputRate / D;
+  const NONE = { freq: -1, clarity: 0, rms: 0 };
 
-  // Remove DC / very-low-frequency drift first: a non-zero mean skews the
-  // NSDF normalisation and biases the period estimate.
+  // Decimate (boxcar average of D samples -- a last bit of anti-aliasing on
+  // top of the upstream low-pass) and remove DC in one pass.
+  const buffer = new Float64Array(SIZE);
   let mean = 0;
-  for (let i = 0; i < SIZE; i++) mean += buffer[i];
-  mean /= SIZE;
-
-  let rms = 0;
   for (let i = 0; i < SIZE; i++) {
-    const v = buffer[i] - mean;
-    rms += v * v;
+    let acc = 0;
+    for (let k = 0; k < D; k++) acc += input[i * D + k];
+    buffer[i] = acc / D;
+    mean += buffer[i];
   }
-  rms = Math.sqrt(rms / SIZE);
-  if (rms < MPM_RMS_GATE) return -1;
-
-  const maxLag = Math.min(SIZE - 2, Math.floor(sampleRate / MPM_FMIN));
-  const minLag = Math.max(2, Math.floor(sampleRate / MPM_FMAX));
-
-  // cumSq[k] = sum of (buffer[i]-mean)^2 for i in [0, k) -- lets the NSDF
-  // denominator for each lag be computed in O(1).
+  mean /= SIZE;
+  // cumSq[k] = sum of buffer[i]^2 for i in [0, k) -- NSDF denominator in O(1) per lag.
   const cumSq = new Float64Array(SIZE + 1);
   for (let i = 0; i < SIZE; i++) {
-    const v = buffer[i] - mean;
-    cumSq[i + 1] = cumSq[i] + v * v;
+    buffer[i] -= mean;
+    cumSq[i + 1] = cumSq[i] + buffer[i] * buffer[i];
   }
   const totalSq = cumSq[SIZE];
+  const rms = Math.sqrt(totalSq / SIZE);
+  NONE.rms = rms;
+  if (rms < MPM_RMS_GATE) return NONE;
 
-  // NSDF from lag 1 -- NOT from minLag. Starting at minLag used to make the
-  // hump-finder below mistake the rising edge of the true fundamental's peak
-  // for "a partial hump sitting at the start of the range" and discard it
-  // outright, whenever the target period was short enough to land close to
-  // minLag -- which is exactly the case for the open high E string (period
-  // ~134-146 samples against a minLag of ~100-110). That string's real peak
-  // was getting thrown away every time, leaving only a weaker harmonic hump
-  // that often fell below MPM_CLARITY_MIN -- read as "no pitch" and a meter
-  // that never moved. Computing from lag 1 lets the hump-finder see the
-  // actual boundary of the trivial zero-lag lobe instead of an arbitrary
-  // frequency-based cutoff; minLag/maxLag are applied afterwards, only to
-  // filter which hump we're allowed to pick.
-  const nsdf = new Float64Array(maxLag + 1);
-  for (let lag = 1; lag <= maxLag; lag++) {
+  const maxLag = Math.min(SIZE - 3, Math.floor(sampleRate / MPM_FMIN));
+  const minLag = Math.max(2, Math.floor(sampleRate / MPM_FMAX));
+
+  // NSDF from lag 1 (not minLag) so the hump-finder sees the real edge of
+  // the zero-lag lobe -- see git history (Build <=54) for the high-E story.
+  const nsdf = new Float64Array(maxLag + 2);
+  for (let lag = 1; lag <= maxLag + 1; lag++) {
     let ac = 0;
-    for (let i = 0; i < SIZE - lag; i++) {
-      ac += (buffer[i] - mean) * (buffer[i + lag] - mean);
-    }
-    const denom = (cumSq[SIZE - lag] - cumSq[0]) + (totalSq - cumSq[lag]);
+    for (let i = 0; i < SIZE - lag; i++) ac += buffer[i] * buffer[i + lag];
+    const denom = cumSq[SIZE - lag] + (totalSq - cumSq[lag]);
     nsdf[lag] = denom > 0 ? (2 * ac) / denom : 0;
   }
 
-  // Take the local maximum of each positive hump of the NSDF, keeping only
-  // humps whose peak lag falls within the valid string-frequency range. We
-  // used to pre-skip the initial positive run starting at lag 1 outright,
-  // on the assumption it was always "the trivial hump at zero lag" and
-  // never contained the true period. That assumption breaks for the
-  // highest string: open high E's period (~134-146 samples) is short
-  // enough that, for a clean tone with a strong fundamental and weak
-  // harmonics, the NSDF sometimes doesn't dip negative at all between lag 1
-  // and the true period -- so the pre-skip swallowed the only hump that
-  // mattered, every single frame, and the string never registered at all.
-  // The minLag check below already rejects genuinely trivial near-zero-lag
-  // humps (anything shorter than the shortest valid string period), so it's
-  // the only filter needed -- no separate pre-skip.
+  // Local maximum of each positive hump whose peak lies in the valid range.
   const humps = [];
   let l = 1;
   while (l <= maxLag) {
@@ -121,11 +104,11 @@ function mpmDetect(buffer, sampleRate) {
     }
     if (humpArg !== -1 && humpArg >= minLag) humps.push({ arg: humpArg, val: humpMax });
   }
-  if (humps.length === 0) return -1;
+  if (humps.length === 0) return NONE;
 
   let globalMax = 0;
   for (const h of humps) if (h.val > globalMax) globalMax = h.val;
-  if (globalMax < MPM_CLARITY_MIN) return -1;
+  if (globalMax < MPM_CLARITY_MIN) return NONE;
 
   const threshold = MPM_PEAK_RATIO * globalMax;
   let chosen = humps[0];
@@ -133,18 +116,20 @@ function mpmDetect(buffer, sampleRate) {
     if (h.val >= threshold) { chosen = h; break; }
   }
   const peakLag = chosen.arg;
-  if (peakLag <= 0) return -1;
 
-  // Parabolic interpolation around the chosen NSDF peak for a sub-sample period.
+  // Parabolic interpolation around the chosen NSDF peak: sub-sample period
+  // plus the interpolated peak height (the clarity of this reading).
   let period = peakLag;
-  if (peakLag > minLag && peakLag < maxLag) {
-    const y1 = nsdf[peakLag - 1], y2 = nsdf[peakLag], y3 = nsdf[peakLag + 1];
-    const a = (y1 + y3 - 2 * y2) / 2;
-    const b = (y3 - y1) / 2;
-    if (a !== 0) period = peakLag - b / (2 * a);
+  let clarity = chosen.val;
+  const y1 = nsdf[peakLag - 1], y2 = nsdf[peakLag], y3 = nsdf[peakLag + 1];
+  const a = (y1 + y3 - 2 * y2) / 2;
+  const b = (y3 - y1) / 2;
+  if (a < 0) {
+    period = peakLag - b / (2 * a);
+    clarity = y2 - (b * b) / (4 * a);
   }
-  if (period <= 0) return -1;
-  return sampleRate / period;
+  if (period <= 0 || clarity < MPM_CLARITY_MIN) return NONE;
+  return { freq: sampleRate / period, clarity: Math.min(1, clarity), rms };
 }
 
 // Guitar strings are harmonic-rich -- especially thinner, brighter high
@@ -177,22 +162,148 @@ function correctOctaveError(freq, expectedFreq) {
   return best;
 }
 
+// Turns the stream of per-frame readings (in cents vs. the target string)
+// into what the UI shows and decides. Pure logic, no DOM/audio, so it can be
+// tested offline against simulated plucks.
+//
+// Why this exists: a plucked string physically starts *sharp* -- the extra
+// tension of the big initial swing raises the pitch by a few cents (more for
+// a harder pluck) and it glides back down over roughly half a second. The old
+// app logic confirmed after 500 ms within +/-5 cents of a smoothed value, so
+// it largely judged that glide: a hard pluck read differently from a soft
+// one, and a slightly-flat string could get confirmed on its sharp attack.
+// Now a string only counts as in tune once the readings over a short window
+// are *steady*: small spread and no remaining drift.
+const STAB_WINDOW_MS = 400;        // readings considered for the steadiness test
+const STAB_MIN_SPAN_MS = 250;      // window must actually cover this much time
+const STAB_MIN_READINGS = 10;
+const STAB_MAX_SPREAD = 3;         // cents, p90 - p10 across the window
+const STAB_MAX_SLOPE = 6;          // cents/second -- still gliding if faster
+const STAB_OUTLIER_CENTS = 60;     // octave slips / stray locks are far outside this
+const STAB_OUTLIER_RESEED = 8;     // ...unless they persist: then the pitch really moved
+const STAB_DISPLAY_MEDIAN = 5;     // needle = median of the last few readings...
+const STAB_DISPLAY_SMOOTHING = 0.3; // ...then lightly smoothed
+
+function median(arr) {
+  const s = [...arr].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function quantile(sorted, q) {
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+class PitchStabilizer {
+  constructor() { this.reset(); }
+
+  reset() {
+    this.window = [];      // {t, c}
+    this.display = null;
+    this.outlierStreak = 0;
+  }
+
+  // A fresh pluck: forget the previous note's readings for the steadiness
+  // test (the new note glides on its own), but keep the needle where it is.
+  newNote() {
+    this.window = [];
+    this.outlierStreak = 0;
+  }
+
+  push(cents, t) {
+    const w = this.window;
+    while (w.length && t - w[0].t > STAB_WINDOW_MS) w.shift();
+
+    if (w.length >= 3) {
+      const med = median(w.map((r) => r.c));
+      if (Math.abs(cents - med) > STAB_OUTLIER_CENTS) {
+        this.outlierStreak++;
+        if (this.outlierStreak < STAB_OUTLIER_RESEED) return this.state();
+        w.length = 0; // it wasn't an outlier, the pitch genuinely moved
+      }
+    }
+    this.outlierStreak = 0;
+    w.push({ t, c: cents });
+
+    const recent = w.slice(-STAB_DISPLAY_MEDIAN).map((r) => r.c);
+    const target = median(recent);
+    this.display = this.display === null || Math.abs(target - this.display) > STAB_OUTLIER_CENTS
+      ? target
+      : this.display + STAB_DISPLAY_SMOOTHING * (target - this.display);
+    return this.state();
+  }
+
+  state() {
+    const w = this.window;
+    if (this.display === null || w.length === 0) return null;
+    const cs = w.map((r) => r.c);
+    const sorted = [...cs].sort((a, b) => a - b);
+    const med = quantile(sorted, 0.5);
+    let stable = false;
+    let spread = Infinity, slope = Infinity;
+    if (w.length >= STAB_MIN_READINGS && w[w.length - 1].t - w[0].t >= STAB_MIN_SPAN_MS) {
+      spread = quantile(sorted, 0.9) - quantile(sorted, 0.1);
+      // least-squares slope in cents per second
+      const n = w.length;
+      let mt = 0, mc = 0;
+      for (const r of w) { mt += r.t; mc += r.c; }
+      mt /= n; mc /= n;
+      let num = 0, den = 0;
+      for (const r of w) { num += (r.t - mt) * (r.c - mc); den += (r.t - mt) ** 2; }
+      slope = den > 0 ? (num / den) * 1000 : 0;
+      stable = spread <= STAB_MAX_SPREAD && Math.abs(slope) <= STAB_MAX_SLOPE;
+    }
+    return { display: this.display, median: med, stable, spread, slope };
+  }
+}
+
+// Band-pass tracking the target string: keep partials 2..~6, drop the rest.
+// Why drop the fundamental: in real recordings it is the *least* reliable
+// part of the sound. A phone mic barely picks up a low E's fundamental, and
+// the A string's fundamental (110 Hz) sits right on the guitar body's air
+// resonance (~100 Hz), which pulls it: measured at -25 cents while every
+// harmonic of the same note sat at -7. A low-pass-only version of this
+// rework (keeping the fundamental) read that A string 6 cents flatter than
+// the old detector and jumped around more. Partials 2..6 still repeat once
+// per fundamental period, so the NSDF still finds the true period (and
+// correctOctaveError catches the rare lock onto the 2nd partial's period).
+const BANDPASS_LOW_RATIO = 1.5;
+const BANDPASS_HIGH_RATIO = 6;
+const BANDPASS_DEFAULT_HZ = [60, 2000]; // no target known yet
+const ONSET_RMS_RATIO = 1.3;    // frame RMS jumping by this much = a (re)pluck
+
 class GuitarTuner {
   constructor() {
     this.audioCtx = null;
     this.analyser = null;
+    this.filters = [];
     this.stream = null;
     this.rafId = null;
     this.buffer = null;
-    this.onUpdate = null; // callback({frequency, note, octave, cents})
+    this.onUpdate = null; // callback({frequency, note, octave, cents, clarity, msSinceOnset, onsetId}) or null
     this.listening = false;
-    this.targetFrequency = null; // expected frequency of the string being tuned, used for octave correction
+    this.targetFrequency = null; // expected frequency of the string being tuned
+    this.prevRms = 0;
+    this.lastOnsetAt = 0;
+    this.onsetId = 0;
   }
 
-  // Called by the app whenever the active tuning target (string) changes,
-  // so the detector can correct octave-lock errors against the right note.
+  // Called by the app whenever the active tuning target (string) changes:
+  // used for octave correction and to retune the input low-pass.
   setTargetFrequency(freq) {
     this.targetFrequency = freq || null;
+    this._applyFilterCutoff();
+  }
+
+  _applyFilterCutoff() {
+    if (!this.audioCtx) return;
+    const t = this.targetFrequency;
+    const [lo, hi] = t ? [t * BANDPASS_LOW_RATIO, t * BANDPASS_HIGH_RATIO] : BANDPASS_DEFAULT_HZ;
+    for (const f of this.filters) {
+      f.frequency.setValueAtTime(f.type === "highpass" ? lo : hi, this.audioCtx.currentTime);
+    }
   }
 
   // sharedCtx: an AudioContext to reuse instead of creating a new one.
@@ -218,10 +329,24 @@ class GuitarTuner {
     }
     const source = this.audioCtx.createMediaStreamSource(this.stream);
     this.source = source;
+    // Two cascaded 2nd-order high-passes + two low-passes (24 dB/octave
+    // each side): the band-pass described above, which also anti-aliases
+    // mpmDetect's decimation.
+    this.filters = ["highpass", "highpass", "lowpass", "lowpass"].map((type) => {
+      const f = this.audioCtx.createBiquadFilter();
+      f.type = type;
+      f.Q.value = 0.7071;
+      return f;
+    });
+    this._applyFilterCutoff();
     this.analyser = this.audioCtx.createAnalyser();
-    this.analyser.fftSize = 2048;
-    source.connect(this.analyser);
+    this.analyser.fftSize = 4096; // ~85 ms at 48 kHz; decimated to 1024 samples before analysis
+    let node = source;
+    for (const f of this.filters) { node.connect(f); node = f; }
+    node.connect(this.analyser);
     this.buffer = new Float32Array(this.analyser.fftSize);
+    this.prevRms = 0;
+    this.lastOnsetAt = 0;
     this.listening = true;
     this._tick();
   }
@@ -234,11 +359,28 @@ class GuitarTuner {
     // logging keeps the loop alive even if a single frame's analysis fails.
     try {
       this.analyser.getFloatTimeDomainData(this.buffer);
-      let freq = mpmDetect(this.buffer, this.audioCtx.sampleRate);
+      const r = mpmDetect(this.buffer, this.audioCtx.sampleRate);
+      const now = performance.now();
+      // Onset = the (filtered) level jumping up. While a pluck is still
+      // sliding into the window this fires on several frames in a row, so
+      // lastOnsetAt ends up at the *end* of the attack.
+      if (r.rms > MPM_RMS_GATE && r.rms > this.prevRms * ONSET_RMS_RATIO) {
+        if (now - this.lastOnsetAt > 150) this.onsetId++;
+        this.lastOnsetAt = now;
+      }
+      this.prevRms = r.rms;
+
+      let freq = r.freq;
       if (freq !== -1) freq = correctOctaveError(freq, this.targetFrequency);
       if (freq !== -1 && freq > 30 && freq < 1200) {
         const note = freqToNote(freq);
-        this.onUpdate({ frequency: freq, ...note });
+        this.onUpdate({
+          frequency: freq,
+          clarity: r.clarity,
+          msSinceOnset: now - this.lastOnsetAt,
+          onsetId: this.onsetId,
+          ...note,
+        });
       } else {
         this.onUpdate(null);
       }
@@ -252,17 +394,19 @@ class GuitarTuner {
     this.listening = false;
     if (this.rafId) cancelAnimationFrame(this.rafId);
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
-    if (this.source) { try { this.source.disconnect(); } catch (err) { /* already disconnected */ } }
-    if (this.analyser) { try { this.analyser.disconnect(); } catch (err) { /* already disconnected */ } }
+    for (const node of [this.source, ...this.filters, this.analyser]) {
+      if (node) { try { node.disconnect(); } catch (err) { /* already disconnected */ } }
+    }
     // Only close the context if we created it ourselves -- a shared
     // context is owned by the caller and may still be in use elsewhere
     // (reference tones, chime, metronome).
     if (this.audioCtx && this.ownsContext) this.audioCtx.close();
     this.audioCtx = null;
     this.analyser = null;
+    this.filters = [];
     this.source = null;
     this.stream = null;
   }
 }
 
-window.GuitarTunerEngine = { GuitarTuner, TUNINGS, freqToNote };
+window.GuitarTunerEngine = { GuitarTuner, PitchStabilizer, TUNINGS, freqToNote, mpmDetect, correctOctaveError };

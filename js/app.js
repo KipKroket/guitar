@@ -1,8 +1,9 @@
 (function () {
-  const { GuitarTuner, TUNINGS, freqToNote } = window.GuitarTunerEngine;
+  const { GuitarTuner, PitchStabilizer, TUNINGS, freqToNote } = window.GuitarTunerEngine;
 
-  const CONFIRM_CENTS = 5;      // how close counts as "in tune"
-  const CONFIRM_HOLD_MS = 500;  // how long it must stay in tune before confirming
+  const CONFIRM_CENTS = 3;      // how close counts as "in tune" (was 5; the detector is now accurate
+                                // to well under a cent, and 5 left audible beating between strings)
+  const CONFIRM_HOLD_MS = 500;  // how long it must stay steady-and-in-tune before confirming
   const ADVANCE_DELAY_MS = 700; // pause after confirmation before moving on
 
   const SIGNAL_GRACE_MS = 2500;    // brief dropouts (breath, pick noise, or a plucked string simply
@@ -14,26 +15,12 @@
                                     // blip. The CONFIRM_HOLD_MS timer below is wall-clock based, so an
                                     // in-tune hold keeps accumulating silently during this grace window.
   const HOLD_GRACE_MS = 400;       // a stray out-of-tune reading doesn't cancel an in-tune hold
-  const CENTS_SMOOTHING = 0.25;    // needle/reading smoothing factor (0-1, lower = calmer)
-  const HOLD_SMOOTHING = 0.2;      // separate, calmer filter that decides "in tune" for confirming --
-                                    // steadier than the needle so a stray noise spike can't stall the
-                                    // auto-advance. Was 0.08, which (paired with the old detector's
-                                    // sharp low-string bias) was so sluggish a correctly tuned string
-                                    // could take many seconds to confirm, or never cross the line at
-                                    // all. The detector no longer has that bias and the 150-cent
-                                    // outlier gate below still swallows true octave slips, so this can
-                                    // track real pitch changes far more promptly.
-  const HOLD_OUTLIER_GATE_CENTS = 150; // a single reading this far from the current hold estimate is
-                                        // almost certainly a bad detection (octave slip); ignore it
-  const HOLD_OUTLIER_RESEED_FRAMES = 15; // ~0.25s of consecutive rejections means the *hold* value
-                                          // itself is the bad one (e.g. seeded off a noisy attack-
-                                          // transient reading right when the string was plucked) --
-                                          // re-seed instead of rejecting every future update forever
+  const ATTACK_SKIP_MS = 150;      // ignore readings this soon after a (re)pluck: the pick transient
+                                    // and the sharpest part of the attack pitch glide. The rest of the
+                                    // glide is handled by PitchStabilizer's steadiness test (tuner.js).
   const NEAR_ENTER_CENTS = 15;     // enter the quiet "near" zone once this close
   const NEAR_EXIT_CENTS = 20;      // only leave the "near" zone once this far off again (hysteresis)
   const DIRECTION_DEBOUNCE_MS = 350; // how long a direction must hold before the hint switches
-  const ONSET_AGREE_CENTS = 25;    // how close two consecutive raw readings must be before a fresh
-                                    // pluck is trusted to seed the filters -- see settleRawCents()
 
   /* ---------- Bottom nav height (for the overlays -- see .overlay in CSS) ---------- */
   // The overlays (search / song detail) stop above the bottom nav instead of
@@ -217,7 +204,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "54";
+  const BUILD = "55";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 
@@ -525,15 +512,13 @@
   let outOfTuneSince = null;
   let confirmedForTarget = false;
   let sessionComplete = false;
-  let smoothedCents = null;
-  let holdCents = null;
-  let holdOutlierStreak = 0;
+  const stabilizer = new PitchStabilizer();
+  let lastOnsetId = -1;
   let lastSignalAt = 0;
   let hintZone = "far";           // "far" | "near", with hysteresis between them
   let committedDirection = null;  // "up" | "down" | null
   let pendingDirection = null;
   let pendingDirectionSince = 0;
-  let settleCandidate = null;     // last raw reading not yet confirmed by a second, agreeing one
 
   function resetSession() {
     currentTargetIndex = 0;
@@ -563,32 +548,11 @@
   }
 
   function resetHintTracking() {
-    smoothedCents = null;
-    holdCents = null;
-    holdOutlierStreak = 0;
+    stabilizer.reset();
     hintZone = "far";
     committedDirection = null;
     pendingDirection = null;
     pendingDirectionSince = 0;
-    settleCandidate = null;
-  }
-
-  // Returns a trustworthy cents value once two consecutive raw readings land
-  // within ONSET_AGREE_CENTS of each other, else null. A lone raw reading --
-  // especially the very first frame of a fresh pluck -- is often thrown
-  // wildly off by the attack transient (broadband pick/string noise the
-  // pitch detector briefly mistakes for a period). Seeding the filters
-  // directly off that one reading is what made the meter swing hard on the
-  // first strike and, worse, poisoned the slow hold filter used for
-  // confirming: once seeded off a bad reading, later correct-but-far-off
-  // readings got rejected as *outliers* against that bad seed and needed
-  // many more good frames -- often another whole strike -- to out-vote it
-  // (see HOLD_OUTLIER_GATE_CENTS), which looked like "this string won't
-  // confirm" even while the fast needle already showed it in tune.
-  function settleRawCents(rawCents) {
-    const agrees = settleCandidate !== null && Math.abs(rawCents - settleCandidate) <= ONSET_AGREE_CENTS;
-    settleCandidate = rawCents;
-    return agrees ? rawCents : null;
   }
 
   /* ---------- String chips ---------- */
@@ -721,7 +685,11 @@
     if (hintZone === "near") {
       committedDirection = null;
       pendingDirection = null;
-      setHint("Almost there…");
+      // The confirm window is only +/-CONFIRM_CENTS now, so most of the
+      // "near" zone still needs a nudge -- say which way instead of leaving
+      // the user at e.g. +8 with no direction.
+      if (absCents <= CONFIRM_CENTS + 1) setHint("Almost there…");
+      else setHint(cents < 0 ? "Almost – a hair up." : "Almost – a hair down.");
       return;
     }
 
@@ -769,9 +737,7 @@
       if (lastSignalAt && now - lastSignalAt < SIGNAL_GRACE_MS) return;
       inTuneSince = null;
       outOfTuneSince = null;
-      smoothedCents = null;
-      holdCents = null;
-      settleCandidate = null;
+      stabilizer.reset();
       noteNameEl.classList.remove("in-tune");
       if (!confirmedForTarget) {
         setHint("Listening… play a single string.");
@@ -793,42 +759,27 @@
     const targetNote = freqToNote(targetFreq);
     const rawCents = 1200 * Math.log2(result.frequency / targetFreq);
 
-    if (smoothedCents === null) {
-      // Fresh start for this string (or right after a dropout cleared the
-      // filters) -- don't trust a lone raw reading to seed either filter.
-      // See settleRawCents() for why.
-      const settled = settleRawCents(rawCents);
-      if (settled === null) return;
-      smoothedCents = settled;
-      holdCents = settled;
-      holdOutlierStreak = 0;
-    } else {
-      smoothedCents = smoothedCents + CENTS_SMOOTHING * (rawCents - smoothedCents);
+    // A new pluck starts its own attack glide -- judge it on its own.
+    if (result.onsetId !== lastOnsetId) {
+      lastOnsetId = result.onsetId;
+      stabilizer.newNote();
     }
-    const cents = Math.round(smoothedCents);
+    // Pick transient + the steepest part of the glide: not worth showing.
+    if (result.msSinceOnset < ATTACK_SKIP_MS) return;
+
+    const state = stabilizer.push(rawCents, performance.now());
+    if (!state) return;
+    const cents = Math.round(state.display);
 
     noteNameTextEl.textContent = `${targetNote.name}${targetNote.octave}`;
     centsValueEl.innerHTML = `${cents > 0 ? "+" : ""}${cents} <span>cents</span>`;
     freqValueEl.textContent = `${result.frequency.toFixed(1)} Hz`;
-    setNeedle(smoothedCents);
+    setNeedle(state.display);
 
-    // A second, much slower filter decides whether the string counts as "in
-    // tune" for confirming/advancing. The needle above stays snappy off the
-    // fast filter; this one deliberately lags behind so an isolated bad
-    // reading (an octave slip from the pitch detector, a stray harmonic,
-    // pick noise) barely moves it and can't stall or restart the hold.
-    if (Math.abs(rawCents - holdCents) <= HOLD_OUTLIER_GATE_CENTS) {
-      holdCents = holdCents + HOLD_SMOOTHING * (rawCents - holdCents);
-      holdOutlierStreak = 0;
-    } else {
-      holdOutlierStreak++;
-      if (holdOutlierStreak >= HOLD_OUTLIER_RESEED_FRAMES) {
-        holdCents = rawCents;
-        holdOutlierStreak = 0;
-      }
-    }
-
-    const inTune = Math.abs(holdCents) <= CONFIRM_CENTS;
+    // "In tune" for confirming = the median of a short window of readings is
+    // within CONFIRM_CENTS *and* those readings are steady (no remaining
+    // attack glide, no jitter). See PitchStabilizer in tuner.js.
+    const inTune = state.stable && Math.abs(state.median) <= CONFIRM_CENTS;
     noteNameEl.classList.toggle("in-tune", inTune);
 
     if (confirmedForTarget) return;
@@ -848,7 +799,7 @@
         }, ADVANCE_DELAY_MS);
       }
     } else {
-      updateDirectionHint(smoothedCents);
+      updateDirectionHint(state.display);
       if (inTuneSince !== null) {
         // Mid-hold already: give a brief grace window before throwing the
         // progress away, so one noisy/glitchy reading (a pick scrape, a
