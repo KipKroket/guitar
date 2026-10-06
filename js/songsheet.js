@@ -742,6 +742,9 @@
         // Following the recording: followers get the line that is lit.
         snapshot.mode = "timestamps";
         snapshot.pos.line = state.timing.nowLine >= 0 ? state.timing.nowLine : null;
+        // pos.index is unused in this mode -- carries the first line that is
+        // NOT lit, so followers light the same group of lines.
+        snapshot.pos.index = state.timing.nowLine >= 0 && state.timing.nowEnd >= 0 ? state.timing.nowEnd : null;
       } else if (state.autoscroll.on) {
         snapshot.mode = "autoscroll";
         snapshot.pos.line = scrollTopToVirtualLine(scrollContainer());
@@ -829,7 +832,11 @@
       for (let k = cur.at + 1; cur.at >= 0 && k < T.anchors.length; k++) {
         if (T.anchors[k].line > idx) { endIdx = T.anchors[k].line; break; }
       }
+      T.nowEnd = endIdx;
       applyNowHighlight(idx, endIdx);
+      // Tell the jam right away when the lit line moves (a new line, a skip),
+      // so followers don't wait for the next interval tick.
+      if (idx !== lastNowIdx && window.GuitarJam && window.GuitarJam.hostNudge) window.GuitarJam.hostNudge();
       if (!wasFollowing) {
         scrollPos = null;
         scrollWritten = null;
@@ -949,6 +956,7 @@
       durMs: 0,
       durDiff: 0,
       nowLine: -1,
+      nowEnd: -1,
       t0: performance.now(),
     };
   }

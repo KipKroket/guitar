@@ -15,7 +15,7 @@
 (function () {
   const API_BASE = "https://guitar-sync.julianleendertse.workers.dev/jam";
   const HOST_TICK_MS = 800;
-  const FOLLOW_POLL_MS = 1000;
+  const FOLLOW_POLL_MS = 700;
   // localStorage, not sessionStorage -- sessionStorage doesn't survive the
   // installed app being closed/killed, which used to silently end a jam the
   // moment the host (or a follower) restarted the app, e.g. to recover from
@@ -163,8 +163,37 @@
     }
   }
 
+  // hostNudge() = "something worth sending just happened" (the lit line
+  // moved, a skip) -- send now instead of waiting for the next interval tick.
+  // One request at a time: a nudge during a request in flight is remembered
+  // and sent right after it.
+  let hostBusy = false;
+  let hostAgain = false;
+  function hostNudge() {
+    if (!session || session.role !== "host") return;
+    if (hostBusy) {
+      hostAgain = true;
+      return;
+    }
+    hostTick();
+  }
+
   async function hostTick() {
     if (!session || session.role !== "host") return;
+    if (hostBusy) return;
+    hostBusy = true;
+    try {
+      await hostSend();
+    } finally {
+      hostBusy = false;
+      if (hostAgain) {
+        hostAgain = false;
+        hostNudge();
+      }
+    }
+  }
+
+  async function hostSend() {
     const SS = window.GuitarSongSheet;
     const snap = SS && SS.getJamSnapshot ? SS.getJamSnapshot() : null;
 
@@ -480,7 +509,7 @@
     followerVelocity = 0;
     followerScrollActive = false;
     followerPlayIndex = null;
-    followerNowEl = null;
+    followerNowEls = [];
     followerDiscrete = false;
   }
 
@@ -557,20 +586,39 @@
   // While the host follows a recording (mode "timestamps") pos.line is the
   // line the host has lit -- light the same one on this copy of the sheet.
   // Any other mode, or the host pausing, clears it.
-  let followerNowEl = null;
+  let followerNowEls = [];
   let followerDiscrete = false; // lines jump one at a time: no speed estimate, quicker catch-up
   function applyFollowerNow(data) {
     followerDiscrete = data.mode === "timestamps";
     let idx = null;
-    if (followerDiscrete && data.pos && data.pos.line != null) idx = Math.round(data.pos.line);
-    const el = idx != null && followerEls ? followerEls.body.querySelector('[data-line-idx="' + idx + '"]') : null;
-    if (el === followerNowEl && (!el || el.classList.contains("ss-line--now"))) return;
-    if (followerNowEl) followerNowEl.classList.remove("ss-line--now");
-    followerNowEl = el;
-    if (el) {
-      void el.offsetWidth; // restart the little flash
-      el.classList.add("ss-line--now");
+    let end = -1;
+    if (followerDiscrete && data.pos && data.pos.line != null) {
+      idx = Math.round(data.pos.line);
+      if (data.pos.index != null) end = data.pos.index; // first line that is NOT lit
     }
+    // Same group the host lights: the line plus the untimed lines after it.
+    const els = [];
+    const first = idx != null && followerEls ? followerEls.body.querySelector('[data-line-idx="' + idx + '"]') : null;
+    if (first) {
+      els.push(first);
+      for (let i = idx + 1; end >= 0 && i < end; i++) {
+        const nx = followerEls.body.querySelector('[data-line-idx="' + i + '"]');
+        if (!nx || nx.parentElement !== first.parentElement) break;
+        els.push(nx);
+      }
+    }
+    if (
+      els.length === followerNowEls.length &&
+      els.every((e, i) => e === followerNowEls[i] && e.classList.contains("ss-line--now"))
+    ) return;
+    followerNowEls.forEach((e) => e.classList.remove("ss-line--now", "ss-line--now-cont", "ss-line--now-more"));
+    followerNowEls = els;
+    els.forEach((e, i) => {
+      void e.offsetWidth; // restart the little flash
+      e.classList.add("ss-line--now");
+      if (i > 0) e.classList.add("ss-line--now-cont");
+      if (i < els.length - 1) e.classList.add("ss-line--now-more");
+    });
   }
 
   // Replays the host's line-mark pulse (js/songsheet.js flashLine(), see
@@ -780,7 +828,7 @@
       // Correction tau is deliberately slower than the old ease-only
       // approach (0.4s) -- the velocity term above already does most of
       // the work of tracking the host, this just keeps it honest.
-      const correctionTau = followerDiscrete ? 0.35 : 0.8;
+      const correctionTau = followerDiscrete ? 0.2 : 0.8;
       const k = 1 - Math.exp(-dt / correctionTau);
       followerRenderedLine += (followerTargetLine - followerRenderedLine) * k;
     }
@@ -994,5 +1042,5 @@
 
   boot();
 
-  window.GuitarJam = { startJam, stopJam, joinJam, leaveJam, hostMarkLine };
+  window.GuitarJam = { startJam, stopJam, joinJam, leaveJam, hostMarkLine, hostNudge };
 })();
