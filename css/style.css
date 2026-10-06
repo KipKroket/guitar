@@ -2773,3 +2773,22 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 .settings-row__desc { margin-top: 0.15rem; font-size: 0.8rem; line-height: 1.45; color: var(--ink-soft); }
 .settings-note { margin-top: 0.55rem; }
 .settings-version { margin-top: 1.4rem; }
+
+/* "Build NN available" under the build number in Settings. */
+.settings-update {
+  display: block;
+  margin: 0.3rem auto 0;
+  padding: 0.35rem 0.8rem;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--amber-deep);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.settings-update[disabled] { opacity: 0.6; cursor: default; text-decoration: none; }

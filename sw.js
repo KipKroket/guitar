@@ -5,7 +5,7 @@
 
 // Bump on every deploy, in lockstep with BUILD in js/app.js -- the two always
 // move together, so the number shown in Settings identifies this exact cache.
-const CACHE = "guitar-v58";
+const CACHE = "guitar-v59";
 
 const SHELL = [
   "./",
@@ -80,6 +80,11 @@ self.addEventListener("fetch", (event) => {
   // the browser -- intercepting it here only risks turning a transient blip
   // into a hard failure, and an offline cache can't answer a live search.
   if (!sameOrigin && !isFont) return;
+
+  // The app's "is there a newer build?" check (js/app.js checkForUpdate)
+  // fetches this file with ?check=... and must see the live copy -- never the
+  // cached one, and never stored.
+  if (sameOrigin && url.searchParams.has("check")) return;
 
   // App shell + local assets: serve from cache first, refresh in the background.
   event.respondWith(

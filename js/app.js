@@ -240,9 +240,56 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "58";
+  const BUILD = "59";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
+
+  /* ---------- "Build NN available" ---------- */
+  // Reads the live sw.js (its cache name carries the build number -- see the
+  // note above) and, when that is newer than the code running here, shows a
+  // small line under the build number. Tapping it asks the service worker
+  // to update and reloads, so a stale installed app can be refreshed on the
+  // spot instead of waiting for the next relaunch to pick it up.
+  const updateEl = document.getElementById("app-update");
+  async function checkForUpdate() {
+    if (!updateEl || !navigator.onLine) return;
+    try {
+      const res = await fetch("sw.js?check=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) return;
+      const m = (await res.text()).match(/guitar-v(\d+)/);
+      const latest = m ? parseInt(m[1], 10) : 0;
+      if (latest > parseInt(BUILD, 10)) {
+        updateEl.textContent = "Build " + latest + " available \u00b7 tap to update";
+        updateEl.hidden = false;
+      } else {
+        updateEl.hidden = true;
+      }
+    } catch (err) {
+      /* offline or blocked -- no line shown */
+    }
+  }
+  if (updateEl) {
+    updateEl.addEventListener("click", async () => {
+      updateEl.disabled = true;
+      updateEl.textContent = "Updating\u2026";
+      try {
+        const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+        if (reg) await reg.update();
+      } catch (err) {
+        /* fall through to the reload below */
+      }
+      // The new worker normally takes over by itself and index.html reloads
+      // on that; this is the fallback if it doesn't.
+      setTimeout(() => location.reload(), 4000);
+    });
+    setTimeout(checkForUpdate, 1500);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
+    document.addEventListener("pagechange", (e) => {
+      if (e.detail && e.detail.page === "settings") checkForUpdate();
+    });
+  }
 
   /* ---------- Tuning selection ---------- */
   // The tuner remembers the last tuning you picked (there is no separate
