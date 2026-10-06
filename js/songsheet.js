@@ -1203,9 +1203,10 @@
       host.hidden = true;
       return;
     }
-    // Once the user has fixed the timing themselves, the pill and the box go away
-    // (the Timing sheet in the ... menu is still there for fine-tuning).
-    if (T.status === "synced" && T.touched && !state.calibrating) {
+    // A working timing needs no pill: it only shows while looking up, when the
+    // timing may be off, or when nothing was found. Fixing it by hand is in
+    // the ... menu (Timing).
+    if (T.status === "synced" && !state.calibrating) {
       host.hidden = true;
       return;
     }
@@ -1224,10 +1225,10 @@
     pill.setAttribute("aria-label", text);
     pill.addEventListener("click", () => {
       if (T.status === "error") startLookup(true);
-      else if (T.status === "synced" || T.status === "warn") setCalibrating(!state.calibrating);
+      else if (T.status === "warn") setCalibrating(!state.calibrating);
       else openTiming();
     });
-    host.appendChild(pill);
+    if (T.status !== "synced") host.appendChild(pill);
     if (state.calibrating) {
       const banner = el("div", "sync-fix");
       banner.appendChild(
