@@ -1197,17 +1197,27 @@
     const host = document.getElementById("detail-timing");
     if (!host) return;
     host.textContent = "";
+    host.classList.remove("is-band");
     const T = state && state.timing;
     if (!T || T.status === "idle" || !state.record || state.adding) {
       host.hidden = true;
       return;
     }
+    // Once the user has fixed the timing themselves, the pill and the box go away
+    // (the Timing sheet in the ... menu is still there for fine-tuning).
+    if (T.status === "synced" && T.touched && !state.calibrating) {
+      host.hidden = true;
+      return;
+    }
     host.hidden = false;
+    // "May be off" and the tap prompt belong together: the whole box turns yellow.
+    const band = T.status === "warn" && state.calibrating;
+    host.classList.toggle("is-band", band);
     const P = PILL[T.status] || PILL.none;
     let text = P.text;
     if (T.status === "synced" && T.offsetMs) text += " · " + fmtSigned(T.offsetMs);
     if (T.status === "none" && T.note === "mismatch") text = "Lyrics don't match LRCLIB · fixed tempo";
-    const pill = el("button", "sync-pill " + P.cls);
+    const pill = el("button", "sync-pill " + P.cls + (band ? " on-band" : ""));
     pill.type = "button";
     pill.appendChild(el("i", null, P.icon));
     pill.appendChild(el("span", null, text));

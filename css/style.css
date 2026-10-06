@@ -2790,6 +2790,17 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
   gap: 0.4rem;
 }
 .detail-timing[hidden] { display: none; }
+/* "Timing may be off" + the tap prompt: the whole box goes yellow, edge to edge. */
+.detail-timing.is-band {
+  flex: 0 0 calc(100% + 1.8rem);
+  margin: 0 -0.9rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--caution);
+  color: #2b1b0a;
+  border-top: 1px solid color-mix(in srgb, #2b1b0a 25%, transparent);
+}
+.detail-timing.is-band .songsheet__btn { background: rgba(255, 255, 255, 0.55); border-color: transparent; color: #2b1b0a; }
+.sync-pill.is-warn.on-band { background: #2b1b0a; color: #fff4d6; }
 .sync-pill {
   display: inline-flex;
   align-items: center;
