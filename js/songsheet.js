@@ -1153,7 +1153,16 @@
   function setCalibrating(on) {
     if (!state || state.calibrating === on) return;
     state.calibrating = on;
-    if (!on && state.timing) state.timing.dismissed = true;
+    const T = state.timing;
+    if (!on && T) {
+      T.dismissed = true;
+      if (T.status === "warn") {
+        // "It's fine": the timing is accepted as it is, so the warning goes away for good.
+        T.touched = true;
+        T.status = "synced";
+        persistTiming();
+      }
+    }
     render();
   }
   function calibrateTo(idx) {
