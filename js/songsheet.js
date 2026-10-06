@@ -789,11 +789,15 @@
       targets.length === nowEls.length &&
       targets.every((t, i) => t === nowEls[i] && t.classList.contains("ss-line--now"))
     ) return;
-    nowEls.forEach((el) => el.classList.remove("ss-line--now"));
+    nowEls.forEach((el) => el.classList.remove("ss-line--now", "ss-line--now-cont", "ss-line--now-more"));
     nowEls = targets;
-    targets.forEach((t) => {
+    targets.forEach((t, i) => {
       void t.offsetWidth; // restart the little flash
       t.classList.add("ss-line--now");
+      // Lines in one group share a single block: the lower ones drop their
+      // top glow and the upper ones their rounded bottom, so nothing overlaps.
+      if (i > 0) t.classList.add("ss-line--now-cont");
+      if (i < targets.length - 1) t.classList.add("ss-line--now-more");
     });
   }
 

@@ -2775,6 +2775,12 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
   border-radius: 8px;
   animation: ss-now-flash 0.9s ease-out;
 }
+/* Several lines lit together (untimed lines ride along with the one before):
+   draw them as one block. The glow around each line is 0.3rem and the gap
+   between lines is 0.3rem, so the upper line's glow already fills the gap;
+   the lower line's top glow is clipped so the two never stack. */
+.ss-line--now-cont { clip-path: inset(0 -0.3rem -0.3rem -0.3rem); border-top-left-radius: 0; border-top-right-radius: 0; }
+.ss-line--now-more { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 @keyframes ss-now-flash {
   from {
     background-color: color-mix(in srgb, var(--amber) 45%, transparent);
