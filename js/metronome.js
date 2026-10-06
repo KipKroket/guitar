@@ -190,10 +190,8 @@
   });
 
   // Stop cleanly if the person navigates away mid-tick.
-  document.querySelectorAll(".nav-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.target !== "metronome" && engine.isRunning()) stop();
-    });
+  document.addEventListener("pagechange", (e) => {
+    if (e.detail && e.detail.page !== "metronome" && engine.isRunning()) stop();
   });
 
   /* ---------- Hook for the song library: "open in metronome" ----------

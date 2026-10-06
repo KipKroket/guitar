@@ -77,34 +77,69 @@
   }, 20000);
 
   /* ---------- Navigation ---------- */
+  // Four tabs -- Songs, Setlists, Tools, Jam -- each a verb. Tools holds three
+  // pages (Tuner, Metronome, Chords) behind one switch at the top; the tab
+  // remembers which one you used last. Settings is not a tab: it opens from
+  // the gear on the Songs page and its back arrow returns to wherever you were.
   const navButtons = document.querySelectorAll(".nav-btn");
   const pages = document.querySelectorAll(".page");
-  const settingsFab = document.getElementById("settings-fab");
+  const settingsBtn = document.getElementById("settings-btn");
   const settingsBack = document.getElementById("settings-back");
+  const toolsHead = document.getElementById("tools-head");
+  const toolButtons = document.querySelectorAll("[data-tool]");
+  const TOOLS = ["tuner", "metronome", "chords"];
+  const LAST_TOOL_KEY = "guitar-last-tool";
   let currentPage = null;
-  // Settings is no longer in the bottom nav -- it opens from the floating gear
-  // and its back arrow returns you to wherever you were. previousPage tracks
-  // the last non-settings page for exactly that.
   let previousPage = "library";
 
+  function lastTool() {
+    let t = null;
+    try { t = localStorage.getItem(LAST_TOOL_KEY); } catch (e) { /* storage blocked */ }
+    if (!TOOLS.includes(t)) t = "tuner";
+    // Piano has no tuner.
+    if (t === "tuner" && document.body.dataset.instrument === "piano") t = "metronome";
+    return t;
+  }
+
+  function tabFor(page) {
+    if (TOOLS.includes(page)) return "tools";
+    if (page === "settings") return "library";
+    return page;
+  }
+
   function showPage(target) {
+    if (target === "tools") target = lastTool();
+    if (TOOLS.includes(target)) {
+      try { localStorage.setItem(LAST_TOOL_KEY, target); } catch (e) { /* storage blocked */ }
+    }
     if (currentPage && currentPage !== "settings") previousPage = currentPage;
     currentPage = target;
+    document.body.dataset.page = target;
     pages.forEach((p) => (p.hidden = p.dataset.page !== target));
-    navButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.target === target));
-    // The gear would sit on top of the Settings page's own back arrow.
-    if (settingsFab) settingsFab.hidden = target === "settings";
+    const tab = tabFor(target);
+    navButtons.forEach((b) => {
+      const on = b.dataset.target === tab;
+      b.classList.toggle("is-active", on);
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+    if (toolsHead) toolsHead.hidden = !TOOLS.includes(target);
+    toolButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.tool === target));
+    const container = document.getElementById("page-container");
+    if (container) container.scrollTop = 0;
     if (target === "chords" && window.GuitarChords) window.GuitarChords.refresh();
-    // js/jam.js listens for this to reposition (or hide) the "jam active"
-    // pill -- it only ever shows on the library page or a song's info page.
+    // js/jam.js listens for this to reposition (or hide) the "jam is running" banner.
     document.dispatchEvent(new CustomEvent("pagechange", { detail: { page: target } }));
   }
 
   navButtons.forEach((btn) => {
     btn.addEventListener("click", () => showPage(btn.dataset.target));
   });
+  toolButtons.forEach((btn) => {
+    btn.addEventListener("click", () => showPage(btn.dataset.tool));
+  });
 
-  if (settingsFab) settingsFab.addEventListener("click", () => showPage("settings"));
+  if (settingsBtn) settingsBtn.addEventListener("click", () => showPage("settings"));
   if (settingsBack) settingsBack.addEventListener("click", () => showPage(previousPage || "library"));
 
   /* ---------- Instrument mode (guitar / piano) ---------- */
@@ -126,11 +161,10 @@
   if (!INSTRUMENTS.includes(instrument)) instrument = "guitar";
   document.body.dataset.instrument = instrument;
 
-  // The guitar/piano switch appears in more than one place (library header,
-  // chord book header) -- keep every instance in sync.
-  const instrumentToggles = document.querySelectorAll(".instrument-switch");
+  // The only guitar/piano control is the segmented switch in Settings.
+  const instrumentButtons = document.querySelectorAll("[data-set-instrument]");
   const syncInstrumentToggles = (inst) =>
-    instrumentToggles.forEach((t) => t.setAttribute("aria-checked", inst === "piano" ? "true" : "false"));
+    instrumentButtons.forEach((b) => b.setAttribute("aria-pressed", b.dataset.setInstrument === inst ? "true" : "false"));
   syncInstrumentToggles(instrument);
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
@@ -167,17 +201,15 @@
     syncInstrumentToggles(next);
     localStorage.setItem("guitar-instrument", next);
     applyInstrumentIdentity(next);
-    // The tuner tab is guitar-only; if it's on screen when switching to
-    // piano, step back to the library (where piano mode lives).
-    if (next === "piano" && currentPage === "tuner") showPage("library");
+    // The tuner is guitar-only; if it's on screen when switching to piano,
+    // land on the metronome instead.
+    if (next === "piano" && currentPage === "tuner") showPage("metronome");
     syncThemeColor();
     document.dispatchEvent(new CustomEvent("instrumentchange", { detail: { instrument: next } }));
   }
 
-  instrumentToggles.forEach((t) => {
-    t.addEventListener("click", () => {
-      setInstrument(instrument === "guitar" ? "piano" : "guitar");
-    });
+  instrumentButtons.forEach((b) => {
+    b.addEventListener("click", () => setInstrument(b.dataset.setInstrument));
   });
 
   // Exposed so the song library can read the current instrument and switch
@@ -185,17 +217,21 @@
   window.GuitarApp = { showPage, getInstrument: () => instrument, getCurrentPage: () => currentPage };
 
   /* ---------- Theme ---------- */
-  const themeToggle = document.getElementById("theme-toggle");
+  const themeButtons = document.querySelectorAll("[data-set-theme]");
   const savedTheme = localStorage.getItem("guitar-theme") || "light";
+  const syncThemeButtons = (t) =>
+    themeButtons.forEach((b) => b.setAttribute("aria-pressed", b.dataset.setTheme === t ? "true" : "false"));
   document.body.dataset.theme = savedTheme;
-  themeToggle.setAttribute("aria-pressed", savedTheme === "dark");
+  syncThemeButtons(savedTheme);
 
-  themeToggle.addEventListener("click", () => {
-    const next = document.body.dataset.theme === "dark" ? "light" : "dark";
-    document.body.dataset.theme = next;
-    themeToggle.setAttribute("aria-pressed", next === "dark");
-    localStorage.setItem("guitar-theme", next);
-    syncThemeColor();
+  themeButtons.forEach((b) => {
+    b.addEventListener("click", () => {
+      const next = b.dataset.setTheme;
+      document.body.dataset.theme = next;
+      syncThemeButtons(next);
+      localStorage.setItem("guitar-theme", next);
+      syncThemeColor();
+    });
   });
 
   /* ---------- Build number ---------- */
@@ -204,26 +240,20 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "56";
+  const BUILD = "57";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 
   /* ---------- Tuning selection ---------- */
+  // The tuner remembers the last tuning you picked (there is no separate
+  // "default tuning" setting any more). Same storage key as before, so an
+  // existing choice -- and its cloud sync -- carries over.
   const tuningSelect = document.getElementById("tuning-select");
-  const defaultTuningSelect = document.getElementById("default-tuning-select");
-
-  const savedDefaultTuning = localStorage.getItem("guitar-default-tuning") || "standard";
-  tuningSelect.value = savedDefaultTuning;
-  defaultTuningSelect.value = savedDefaultTuning;
-
-  defaultTuningSelect.addEventListener("change", () => {
-    localStorage.setItem("guitar-default-tuning", defaultTuningSelect.value);
-    tuningSelect.value = defaultTuningSelect.value;
-    resetSession();
-    renderStringChips();
-  });
+  const savedTuning = localStorage.getItem("guitar-default-tuning") || "standard";
+  tuningSelect.value = TUNINGS[savedTuning] ? savedTuning : "standard";
 
   tuningSelect.addEventListener("change", () => {
+    localStorage.setItem("guitar-default-tuning", tuningSelect.value);
     resetSession();
     renderStringChips();
   });
@@ -852,8 +882,8 @@
   currentHintText = hintEl.textContent;
   renderStringChips();
 
-  // The app always opens on the library now (it's the shared hub for both
-  // instruments), not the tuner.
+  // The app always opens on the song list (it's the shared hub for both
+  // instruments), not a tool.
   showPage("library");
   syncThemeColor();
 })();

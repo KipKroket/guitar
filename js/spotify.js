@@ -656,7 +656,7 @@
     btn.type = "button";
     btn.className = "audio-dock__btn";
     btn.setAttribute("aria-label", "Spotify");
-    btn.innerHTML = SPOTIFY_SVG;
+    btn.innerHTML = SPOTIFY_SVG + "<span>Spotify</span>";
     btn.addEventListener("click", () => {
       const ctx = window.GuitarAudioDock.getContext();
       if (!ctx.song) return;

@@ -24,23 +24,15 @@
   const SEARCH_RETRY_DELAY_MS = 1200;
 
   /* ---------- Elements ---------- */
-  // The floating Settings gear lives at the same top-left spot these
-  // overlays put their own back arrow -- CSS alone doesn't reliably keep it
-  // out of the way (it's position:absolute in .app, the overlays are
-  // position:fixed, and those don't share one predictable stacking order),
-  // so hide it explicitly whenever an overlay covers the page.
-  const settingsFab = document.getElementById("settings-fab");
-  function syncSettingsFab() {
-    if (!settingsFab) return;
-    settingsFab.hidden =
-      !searchOverlay.hidden ||
-      !detailOverlay.hidden ||
-      Boolean(window.GuitarSetlists && window.GuitarSetlists.anyOverlayOpen && window.GuitarSetlists.anyOverlayOpen());
-  }
-
   const addBtn = document.getElementById("library-add-btn");
   const listEl = document.getElementById("library-list");
   const emptyEl = document.getElementById("library-empty");
+  const noMatchEl = document.getElementById("library-nomatch");
+  const noMatchText = document.getElementById("library-nomatch-text");
+  const noMatchSearchBtn = document.getElementById("library-nomatch-search");
+  const countEl = document.getElementById("library-count");
+  const filterInput = document.getElementById("library-filter");
+  const chipsEl = document.getElementById("library-chips");
 
   const searchOverlay = document.getElementById("search-overlay");
   const searchBackBtn = document.getElementById("search-back");
@@ -56,6 +48,8 @@
   const detailMeta = document.getElementById("detail-meta");
   const detailSaveBtn = document.getElementById("detail-save-btn");
   const detailFavBtn = document.getElementById("detail-favorite-btn");
+  const detailMoreBtn = document.getElementById("detail-more-btn");
+  const detailScroll = document.getElementById("detail-scroll");
   const detailChordLinks = document.getElementById("detail-chord-links");
   const detailTabLinks = document.getElementById("detail-tab-links");
   const detailTabGroup = document.getElementById("tab-links-group");
@@ -63,17 +57,16 @@
   const detailMetronomeBtn = document.getElementById("detail-metronome-btn");
   const detailBpmValue = document.getElementById("detail-bpm-value");
 
-  // Chords/Tabs links and the metronome button both hide while the lyrics
-  // panel is expanded (see the "songsheetexpand" listener below) -- each has
-  // its own other reason to be hidden (custom song / no tempo found yet), so
-  // track those separately and recompute the combined visibility whenever
-  // either changes.
+  // The "Find a sheet" links only show while the song has no sheet yet (and
+  // never for a custom song, which has no external page). Once there is a
+  // sheet they live in the song's ... menu under "Find another sheet". The
+  // metronome shortcut is in that menu too, so its (hidden) button below only
+  // carries the click handler and the tempo.
   let currentIsCustom = false;
   let metronomeAvailable = false;
-  let lyricsExpanded = false;
+  let hasSheet = false;
   function refreshExpandableVisibility() {
-    songLinksEl.hidden = currentIsCustom || lyricsExpanded;
-    detailMetronomeBtn.hidden = !metronomeAvailable || lyricsExpanded;
+    songLinksEl.hidden = currentIsCustom || hasSheet;
   }
 
   const customToggle = document.getElementById("custom-song-toggle");
@@ -188,30 +181,6 @@
     li.className = "song-item";
     li.dataset.id = song.id;
 
-    if (withFavStar) {
-      const favBtn = document.createElement("button");
-      favBtn.type = "button";
-      favBtn.className = "song-item__fav";
-      favBtn.setAttribute("aria-label", "Toggle favorite");
-      favBtn.setAttribute("aria-pressed", song.favorite ? "true" : "false");
-      favBtn.innerHTML =
-        '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3.8l2.55 5.4 5.7.66-4.24 4.03 1.13 5.86L12 16.9l-5.14 2.85 1.13-5.86-4.24-4.03 5.7-.66Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-      favBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        toggleFavorite(song.id);
-      });
-      li.appendChild(favBtn);
-    }
-
-    if (withFavStar && song.learning) {
-      const learningBadge = document.createElement("span");
-      learningBadge.className = "song-item__learning";
-      learningBadge.setAttribute("aria-label", "Still learning");
-      learningBadge.innerHTML =
-        '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4.2h10.5l-2.6 3.4 2.6 3.4H6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-      li.appendChild(learningBadge);
-    }
-
     const img = document.createElement("img");
     img.className = "song-item__art";
     img.loading = "lazy";
@@ -230,6 +199,15 @@
     info.querySelector(".song-item__artist").textContent = song.artist;
     li.appendChild(info);
 
+    if (withFavStar && song.learning) {
+      const learningBadge = document.createElement("span");
+      learningBadge.className = "song-item__learning";
+      learningBadge.setAttribute("aria-label", "Still learning");
+      learningBadge.innerHTML =
+        '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4.2h10.5l-2.6 3.4 2.6 3.4H6Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+      li.appendChild(learningBadge);
+    }
+
     if (withFavStar && songHasTimestamps(song)) {
       const syncedBadge = document.createElement("span");
       syncedBadge.className = "song-item__synced";
@@ -239,18 +217,72 @@
       li.appendChild(syncedBadge);
     }
 
+    // Favorites are only a marker here; the star is toggled on the song's own
+    // screen, so a stray tap in the list can never change it.
+    if (withFavStar && song.favorite) {
+      const star = document.createElement("span");
+      star.className = "song-item__star";
+      star.setAttribute("aria-label", "Favorite");
+      star.innerHTML =
+        '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3.8l2.55 5.4 5.7.66-4.24 4.03 1.13 5.86L12 16.9l-5.14 2.85 1.13-5.86-4.24-4.03 5.7-.66Z" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+      li.appendChild(star);
+    }
+
     li.addEventListener("click", () => (onOpen ? onOpen(song) : openDetail(song)));
     return li;
   }
 
+  // What the Songs page is currently showing: a free-text filter over title
+  // and artist, plus one of the filter chips.
+  let libQuery = "";
+  let libFilter = "all";
+  const FILTERS = {
+    all: () => true,
+    favorites: (s) => !!s.favorite,
+    learning: (s) => !!s.learning,
+    synced: (s) => songHasTimestamps(s),
+  };
+  const FILTER_NAMES = { favorites: "favorites", learning: "songs you're learning", synced: "synced songs" };
+
   function renderLibraryList() {
     const sorted = sortedLibrary();
+    const q = libQuery.trim().toLowerCase();
+    const shown = sorted.filter(
+      (s) => FILTERS[libFilter](s) && (!q || (s.title + " " + s.artist).toLowerCase().includes(q))
+    );
     listEl.innerHTML = "";
     emptyEl.hidden = sorted.length > 0;
-    sorted.forEach((song) => {
+    chipsEl.hidden = sorted.length === 0;
+    filterInput.closest(".library__search").classList.toggle("is-empty", sorted.length === 0);
+    const noMatch = sorted.length > 0 && shown.length === 0;
+    noMatchEl.hidden = !noMatch;
+    if (noMatch) {
+      noMatchText.textContent = q
+        ? `No songs match “${libQuery.trim()}”.`
+        : `No ${FILTER_NAMES[libFilter] || "songs"} yet.`;
+      noMatchSearchBtn.hidden = !q;
+    }
+    const n = sorted.length;
+    countEl.textContent = n === 0 ? "" : n === 1 ? "1 song" : n + " songs";
+    shown.forEach((song) => {
       listEl.appendChild(renderSongRow(song, { withFavStar: true }));
     });
   }
+
+  filterInput.addEventListener("input", () => {
+    libQuery = filterInput.value;
+    renderLibraryList();
+  });
+  chipsEl.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-lib-filter]");
+    if (!b) return;
+    libFilter = b.dataset.libFilter;
+    chipsEl.querySelectorAll("[data-lib-filter]").forEach((c) =>
+      c.setAttribute("aria-pressed", c === b ? "true" : "false")
+    );
+    renderLibraryList();
+  });
+  noMatchSearchBtn.addEventListener("click", () => openSearch(libQuery.trim()));
 
   function toggleFavorite(id) {
     const entry = findEntry(id);
@@ -363,20 +395,19 @@
   let searchAbortController = null;
   let searchDebounceTimer = null;
 
-  function openSearch() {
+  function openSearch(prefill) {
     searchOverlay.hidden = false;
     searchResultsEl.innerHTML = "";
     searchStatusEl.textContent = "";
-    searchInput.value = "";
+    searchInput.value = typeof prefill === "string" ? prefill : "";
     resetCustomForm();
     setTimeout(() => searchInput.focus(), 50);
-    syncSettingsFab();
+    if (searchInput.value.trim().length >= 2) runSearch(searchInput.value.trim());
   }
 
   function closeSearch() {
     searchOverlay.hidden = true;
     if (searchAbortController) searchAbortController.abort();
-    syncSettingsFab();
   }
 
   /* ---------- Custom song (not in the catalogue) ---------- */
@@ -528,7 +559,7 @@
     searchDebounceTimer = setTimeout(() => runSearch(term), SEARCH_DEBOUNCE_MS);
   });
 
-  addBtn.addEventListener("click", openSearch);
+  addBtn.addEventListener("click", () => openSearch());
   searchBackBtn.addEventListener("click", closeSearch);
 
   /* ---------- External chord / tab sources ---------- */
@@ -636,9 +667,10 @@
     detailMeta.hidden = parts.length === 0;
   }
 
+  // "Add to library" only shows while the song isn't saved; removing it is a
+  // deliberate, confirmed step in the ... menu.
   function updateSaveButton(isSaved) {
-    detailSaveBtn.classList.toggle("is-saved", isSaved);
-    detailSaveBtn.textContent = isSaved ? "Saved · Tap to remove" : "Save to Library";
+    detailSaveBtn.hidden = isSaved;
     detailFavBtn.hidden = !isSaved;
   }
 
@@ -679,9 +711,12 @@
     updateSaveButton(saved);
     detailFavBtn.setAttribute("aria-pressed", currentDetailSong.favorite ? "true" : "false");
 
+    hasSheet = false;
+    refreshExpandableVisibility();
     detailOverlay.hidden = false;
+    if (detailScroll) detailScroll.scrollTop = 0;
+    document.body.classList.add("detail-open");
     closeSearch();
-    syncSettingsFab();
     // js/jam.js listens for this to move the "jam active" pill onto the
     // song's info page (and back off it on close).
     document.dispatchEvent(new CustomEvent("songdetailchange", { detail: { open: true } }));
@@ -707,7 +742,8 @@
 
   function closeDetail() {
     detailOverlay.hidden = true;
-    syncSettingsFab();
+    document.body.classList.remove("detail-open");
+    if (window.GuitarUI) window.GuitarUI.close();
     if (window.GuitarSongSheet) window.GuitarSongSheet.close();
     currentDetailId = null;
     currentDetailSong = null;
@@ -732,36 +768,177 @@
     closeDetail();
   });
 
-  detailSaveBtn.addEventListener("click", () => {
-    if (!currentDetailId) return;
-    const existing = findEntry(currentDetailId);
-
-    if (existing) {
-      // Remove from library -- and record the deletion so a merge with an
-      // older copy (backup file / another device) doesn't resurrect it.
-      addTomb(currentDetailId);
-      library = library.filter((s) => s.id !== currentDetailId);
-      commit();
-      currentDetailSong = { ...currentDetailSong, favorite: false };
-      updateSaveButton(false);
-      detailFavBtn.setAttribute("aria-pressed", "false");
-    } else {
-      // Save to library.
-      const now = Date.now();
-      dropTomb(currentDetailId);
-      const entry = { ...currentDetailSong, favorite: false, savedAt: now, updatedAt: now };
-      library.push(entry);
-      commit();
-      currentDetailSong = entry;
-      updateSaveButton(true);
-      // js/setlists.js listens for this to add a freshly-saved song straight
-      // into whichever setlist the user was building when they went looking
-      // for it via search -- see its pendingSetlistId.
-      if (window.GuitarSetlists && window.GuitarSetlists.notifySongSaved) {
-        window.GuitarSetlists.notifySongSaved(entry);
-      }
+  function saveCurrentSong() {
+    if (!currentDetailId || findEntry(currentDetailId)) return;
+    const now = Date.now();
+    dropTomb(currentDetailId);
+    const entry = { ...currentDetailSong, favorite: false, savedAt: now, updatedAt: now };
+    library.push(entry);
+    commit();
+    currentDetailSong = entry;
+    updateSaveButton(true);
+    // js/setlists.js listens for this to add a freshly-saved song straight
+    // into whichever setlist the user was building when they went looking
+    // for it via search -- see its pendingSetlistId.
+    if (window.GuitarSetlists && window.GuitarSetlists.notifySongSaved) {
+      window.GuitarSetlists.notifySongSaved(entry);
     }
     renderLibraryList();
+  }
+
+  // Remove from library -- and record the deletion so a merge with an older
+  // copy (backup file / another device) doesn't resurrect it.
+  function removeCurrentSong() {
+    if (!currentDetailId || !findEntry(currentDetailId)) return;
+    addTomb(currentDetailId);
+    library = library.filter((s) => s.id !== currentDetailId);
+    commit();
+    currentDetailSong = { ...currentDetailSong, favorite: false };
+    updateSaveButton(false);
+    detailFavBtn.setAttribute("aria-pressed", "false");
+    renderLibraryList();
+  }
+
+  detailSaveBtn.addEventListener("click", saveCurrentSong);
+
+  function confirmRemove() {
+    const title = (currentDetailSong && currentDetailSong.title) || "this song";
+    window.GuitarUI.openSheet({
+      title: "Remove from library?",
+      render(body, api) {
+        const p = document.createElement("p");
+        p.className = "ui-sheet__text";
+        p.textContent = `“${title}” leaves your library. Its chord sheet stays on this device.`;
+        body.appendChild(p);
+        const row = document.createElement("div");
+        row.className = "ui-sheet__actions";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "songsheet__btn";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", api.close);
+        const yes = document.createElement("button");
+        yes.type = "button";
+        yes.className = "songsheet__btn songsheet__btn--danger";
+        yes.textContent = "Remove";
+        yes.addEventListener("click", () => {
+          api.close();
+          removeCurrentSong();
+        });
+        row.appendChild(cancel);
+        row.appendChild(yes);
+        body.appendChild(row);
+      },
+    });
+  }
+
+  // "Find another sheet": the external chord/tab sites plus the in-app
+  // fetch, in one sheet -- the same links the song screen shows by itself
+  // while there is no sheet.
+  function openFindSheet() {
+    if (!currentDetailSong) return;
+    const song = currentDetailSong;
+    window.GuitarUI.openSheet({
+      title: "Find another sheet",
+      render(body, api) {
+        const SS = window.GuitarSongSheet;
+        if (SS && SS.getActions) {
+          const a = SS.getActions();
+          const fetchBtn = document.createElement("button");
+          fetchBtn.type = "button";
+          fetchBtn.className = "songsheet__btn songsheet__btn--primary";
+          fetchBtn.textContent = "Fetch automatically";
+          fetchBtn.addEventListener("click", () => {
+            api.close();
+            a.fetchNew();
+          });
+          body.appendChild(fetchBtn);
+        }
+        if (!song.custom) {
+          const q = `${song.artist} ${cleanTitleForSearch(song.title)}`.trim();
+          const piano = currentInstrument() === "piano";
+          const h1 = document.createElement("h3");
+          h1.className = "ui-sheet__sub";
+          h1.textContent = "Chords";
+          body.appendChild(h1);
+          const c = document.createElement("div");
+          c.className = "song-links__buttons";
+          body.appendChild(c);
+          renderSourceButtons(c, CHORD_SOURCES[piano ? "piano" : "guitar"], q);
+          if (!piano) {
+            const h2 = document.createElement("h3");
+            h2.className = "ui-sheet__sub";
+            h2.textContent = "Tabs";
+            body.appendChild(h2);
+            const t = document.createElement("div");
+            t.className = "song-links__buttons";
+            body.appendChild(t);
+            renderSourceButtons(t, TAB_SOURCES, q);
+          }
+        }
+      },
+    });
+  }
+
+  const ICONS = {
+    list: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h13M4 12h13M4 18h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/><circle cx="20" cy="6" r="1.6" fill="currentColor"/><circle cx="20" cy="12" r="1.6" fill="currentColor"/></svg>',
+    metro: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 9l4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17.2V20z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    sync: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    mic: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 19v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 12h16M12 4c2.5 2.2 2.5 13.800 0 16M12 4c-2.5 2.2-2.5 13.800 0 16" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 7h14M9 7V5.2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7m-8 0 .7 12.2a1 1 0 0 0 1 .8h6.600a1 1 0 0 0 1-.8L17 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+  };
+
+  // The song screen's "..." menu: everything you do now and then. What shows
+  // depends on whether the song is saved and whether it has a sheet.
+  detailMoreBtn.addEventListener("click", () => {
+    if (!currentDetailSong) return;
+    const saved = Boolean(findEntry(currentDetailId));
+    const SS = window.GuitarSongSheet;
+    const a = SS && SS.getActions ? SS.getActions() : null;
+    window.GuitarUI.openMenu(detailMoreBtn, [
+      {
+        label: "Paste a sheet",
+        icon: ICONS.edit,
+        hidden: !a || a.hasSheet,
+        onClick: () => a.edit(),
+      },
+      {
+        label: "Add to setlist",
+        icon: ICONS.list,
+        hidden: !saved || !(window.GuitarSetlists && window.GuitarSetlists.openPicker),
+        onClick: () => window.GuitarSetlists.openPicker(currentDetailSong),
+      },
+      {
+        label: detailBpm ? `Open in metronome · ${detailBpm} BPM` : "Open in metronome",
+        icon: ICONS.metro,
+        hidden: !metronomeAvailable,
+        onClick: () => detailMetronomeBtn.click(),
+      },
+      { divider: true, hidden: !(a && a.hasSheet) },
+      { label: "Edit sheet", icon: ICONS.edit, hidden: !(a && a.hasSheet), onClick: () => a.edit() },
+      {
+        label: a && a.syncMode ? "Done syncing" : "Sync lyrics to track",
+        icon: ICONS.sync,
+        hidden: !(a && a.hasLyrics),
+        onClick: () => a.toggleSync(),
+      },
+      {
+        label: a && a.playAlongOn ? "Stop play along" : "Play along",
+        icon: ICONS.mic,
+        hidden: !(a && a.hasChords),
+        onClick: () => a.togglePlayAlong(),
+      },
+      {
+        label: "Find another sheet",
+        icon: ICONS.globe,
+        hidden: !(a && a.hasSheet),
+        onClick: openFindSheet,
+      },
+      { divider: true, hidden: !saved },
+      { label: "Remove from library", icon: ICONS.trash, danger: true, hidden: !saved, onClick: confirmRemove },
+    ]);
   });
 
   detailFavBtn.addEventListener("click", () => {
@@ -794,13 +971,11 @@
     renderLibraryList();
   });
 
-  // js/songsheet.js dispatches this whenever the lyrics panel's expanded
-  // state changes (open/collapse, or the detail page closing). While
-  // expanded, the Chords/Tabs links and the metronome button get out of the
-  // way -- there's nothing below the lyrics to scroll to any more, which is
-  // what keeps scrolling from running past the end of the sheet.
+  // js/songsheet.js dispatches this whenever the sheet changes (opened, a
+  // sheet added or removed, closed). With a sheet on screen the "Find a sheet"
+  // links step out of the way.
   document.addEventListener("songsheetexpand", (e) => {
-    lyricsExpanded = Boolean(e.detail && e.detail.expanded);
+    hasSheet = Boolean(e.detail && e.detail.hasSheet);
     refreshExpandableVisibility();
   });
 
@@ -941,7 +1116,6 @@
     openSearch,
     getSong: (id) => findEntry(id),
     sortedLibrary,
-    syncSettingsFab,
   };
 
   /* ---------- Backup buttons (Settings) ---------- */

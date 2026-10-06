@@ -279,7 +279,7 @@
     function buildSpeedPanel() {
       const wrap = el("div", "audio-dock__panel");
       const head = el("div", "audio-dock__speed-head");
-      head.appendChild(el("span", null, "Snelheid"));
+      head.appendChild(el("span", null, "Playback speed"));
       const valEl = el("span", "audio-dock__speed-val", formatRate(currentRate));
       head.appendChild(valEl);
       wrap.appendChild(head);
@@ -365,7 +365,7 @@
     btn.type = "button";
     btn.className = "audio-dock__btn";
     btn.setAttribute("aria-label", "Backing track");
-    btn.innerHTML = YOUTUBE_SVG;
+    btn.innerHTML = YOUTUBE_SVG + "<span>YouTube</span>";
     btn.addEventListener("click", () => {
       const ctx = window.GuitarAudioDock.getContext();
       if (!ctx.song) return;

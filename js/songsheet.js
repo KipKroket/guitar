@@ -1,5 +1,7 @@
 // Guitar — Song sheet: full lyrics with the chords placed above them, shown
-// inside the song-detail overlay.
+// on the song screen (the detail overlay). The chord strip, the lyrics and the
+// bottom transport bar are all filled from here; the song's "..." menu reads
+// getActions() for the things you do now and then (edit, sync, play along).
 //
 // Phase 1 (this file): parse a pasted chord sheet, render it, transpose it,
 // tap a chord to see its diagram. No network at all -- the text is whatever
@@ -21,8 +23,7 @@
   // Autoscroll tempo is a plain user preference (not per-song, not part of
   // any sheet record) so it's kept in its own tiny localStorage key.
   const SCROLL_SPEED_KEY = "guitar-autoscroll-speed";
-  // Chord chips shown before "Show all" is tapped.
-  const COLLAPSED_CHIP_COUNT = 4;
+  const SHOW_CHORDS_KEY = "guitar-show-chords";
 
   // Same Cloudflare Worker as js/sync.js (SYNC_URL), plus the /song route:
   // it scrapes a chord sheet, caches it, and hands back the same "chords
@@ -526,7 +527,7 @@
   let scrollWritten = null;
 
   function scrollContainer() {
-    return root.closest(".overlay") || document.scrollingElement || document.documentElement;
+    return document.getElementById("detail-scroll") || root.closest(".overlay") || document.scrollingElement || document.documentElement;
   }
 
   function stopAutoscroll() {
@@ -562,7 +563,6 @@
   function stopIfAtBottom(box, y) {
     if (y < box.scrollHeight - box.clientHeight - 1) return false;
     state.autoscroll.on = false;
-    state.autoscroll.menuOpen = false;
     stopAutoscroll();
     render();
     return true;
@@ -807,7 +807,6 @@
       // nothing actually moving.
       if (state && state.autoscroll && state.autoscroll.on) {
         state.autoscroll.on = false;
-        state.autoscroll.menuOpen = false;
         render();
       }
       return;
@@ -1104,7 +1103,6 @@
     }
     if (state.autoscroll.on) {
       state.autoscroll.on = false;
-      state.autoscroll.menuOpen = false;
       stopAutoscroll();
     }
 
@@ -1171,29 +1169,18 @@
     centerPlayAlongChord();
   }
 
-  /* ---- Floating autoscroll control -------------------------------------
-     A small round button pinned to the bottom-right of the app shell
-     (position: absolute against .app -- a plain child of it, not of
-     #songsheet, so it isn't clipped by the overlay's own overflow-y:auto
-     and stays put regardless of scroll position). Anchored to .app rather
-     than position:fixed against the viewport, since fixed positioning is
-     unreliable in iOS standalone (see the .app height comment in
-     style.css) and could drift below the real screen edge, overlapping
-     the bottom nav. Shown whenever the sheet is expanded and has lyrics to
-     scroll through. A tap is a plain play/pause: it starts or stops
-     scrolling directly, picking synced-vs-fixed mode automatically from
-     whether there's anything to sync to (see hasSyncAvailable()) -- so
-     autoscroll is always usable with just this one button, no menu
-     involved. Once it's running, a second, smaller button appears next to
-     it (state.autoscroll.menuOpen) that opens/closes the small panel above
-     showing the tempo slider (or "Synced with playback") and, only when
-     there's an actual choice to make, the Autoscroll/Fixed tempo mode
-     picker -- an explicit toggle rather than something tied to "on", so
-     starting autoscroll never pops the panel open unasked. The menu always
-     starts closed again the next time autoscroll is turned on (same
-     "reopen = start collapsed" pattern as the panel itself). ---- */
+  /* ---- Transport bar --------------------------------------------------
+     The one bar at the bottom of the song screen (#song-transport): a round
+     play/pause for autoscroll, its speed slider, a button for the audio
+     sources (Spotify / YouTube -- js/audiodock.js puts their list and the
+     now-playing bar in the same container) and "Aa" for the display sheet.
+     A tap on play starts or stops scrolling directly, picking synced-vs-
+     fixed mode automatically from whether there's anything to sync to (see
+     hasSyncAvailable()). While a recording is driving the scroll the speed
+     slider gives way to a "Follows the audio" label. ---- */
 
-  let fab = null;
+  let transportRow = null;
+  let transportAudioBtn = null;
 
   // Transpose-invariant, so it's fine to check straight off the stored raw
   // text without re-parsing through transposeModel.
@@ -1203,110 +1190,180 @@
     );
   }
 
-  function renderFab() {
-    const show = !!(
-      state && state.expanded && state.record && !state.adding && sheetHasLyrics(state.record.raw)
-    );
+  function showChordsPref() {
+    try {
+      return localStorage.getItem(SHOW_CHORDS_KEY) !== "0";
+    } catch (e) {
+      return true;
+    }
+  }
+  function saveShowChords(on) {
+    try {
+      localStorage.setItem(SHOW_CHORDS_KEY, on ? "1" : "0");
+    } catch (e) {
+      /* fine to just not remember it */
+    }
+  }
+
+  const ICON_PLAY =
+    '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>';
+  const ICON_PAUSE =
+    '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="7" y="5.5" width="4" height="13" rx="1" fill="currentColor"/><rect x="14" y="5.5" width="4" height="13" rx="1" fill="currentColor"/></svg>';
+  const ICON_NOTE =
+    '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="16.5" cy="16" r="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
+
+  function renderTransport() {
+    const host = document.getElementById("song-transport");
+    if (!host) return;
+    const show = !!(state && state.record && !state.adding && sheetHasLyrics(state.record.raw));
     if (!show) {
-      if (fab) {
-        fab.remove();
-        fab = null;
-      }
+      host.hidden = true;
+      if (transportRow) transportRow.textContent = "";
       return;
     }
-    if (!fab) {
-      fab = el("div", "songsheet__fab");
-      // A child of .bottom-nav, not .app -- see the .songsheet__fab CSS
-      // comment: bottom:100% of the nav itself needs no JS-measured height.
-      (document.querySelector(".bottom-nav") || document.querySelector(".app") || document.body).appendChild(fab);
+    host.hidden = false;
+    if (!transportRow) {
+      transportRow = el("div", "transport__row");
+      host.appendChild(transportRow);
     }
-    fab.textContent = "";
+    transportRow.textContent = "";
 
-    // Only present once autoscroll is actually running -- toggles the menu
-    // below without touching on/off at all, so the big button stays a
-    // plain, one-tap play/pause regardless of whether the menu is open.
-    if (state.autoscroll.on) {
-      const menuBtn = el("button", "songsheet__fab-menu-btn", null);
-      menuBtn.type = "button";
-      menuBtn.setAttribute("aria-pressed", state.autoscroll.menuOpen ? "true" : "false");
-      menuBtn.setAttribute("aria-label", state.autoscroll.menuOpen ? "Hide autoscroll settings" : "Autoscroll settings");
-      if (state.autoscroll.menuOpen) menuBtn.classList.add("is-active");
-      menuBtn.innerHTML =
-        '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="7" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="12" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="17" r="1.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/></svg>';
-      menuBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        state.autoscroll.menuOpen = !state.autoscroll.menuOpen;
-        renderFab();
-      });
-      fab.appendChild(menuBtn);
-    }
-
-    const btn = el("button", "songsheet__fab-btn", null);
-    btn.type = "button";
-    btn.setAttribute("aria-pressed", state.autoscroll.on ? "true" : "false");
-    btn.setAttribute("aria-label", state.autoscroll.on ? "Stop autoscroll" : "Start autoscroll");
-    if (state.autoscroll.on) btn.classList.add("is-active");
-    if (state.autoscroll.on && effectiveSyncedMode()) btn.classList.add("is-synced");
-    btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M6 6l6 6 6-6M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    btn.addEventListener("click", (e) => {
+    const playing = state.autoscroll.on;
+    const synced = playing && effectiveSyncedMode();
+    const play = el("button", "transport__play" + (playing ? " is-on" : "") + (synced ? " is-synced" : ""));
+    play.type = "button";
+    play.setAttribute("aria-label", playing ? "Stop scrolling" : "Start scrolling");
+    play.setAttribute("aria-pressed", playing ? "true" : "false");
+    play.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+    play.addEventListener("click", (e) => {
       e.stopPropagation();
       if (state.autoscroll.on) {
         state.autoscroll.on = false;
-        state.autoscroll.menuOpen = false;
         stopAutoscroll();
       } else {
-        // Pick the pace automatically: follow the recording when there's
-        // something to follow, otherwise fall back to a fixed tempo.
+        // Follow the recording when there's something to follow, otherwise
+        // fall back to a fixed tempo.
         state.autoscroll.forceManual = !hasSyncAvailable();
         state.autoscroll.on = true;
         startAutoscroll();
       }
-      renderFab();
+      renderTransport();
     });
-    fab.appendChild(btn);
+    transportRow.appendChild(play);
 
-    if (state.autoscroll.on && state.autoscroll.menuOpen) {
-      const menu = el("div", "songsheet__fab-menu");
+    const pace = el("div", "transport__pace");
+    if (synced) {
+      pace.appendChild(el("span", "transport__pace-label transport__pace-label--synced", "Follows the audio"));
+    } else {
+      const head = el("div", "transport__pace-head");
+      head.appendChild(el("span", "transport__pace-label", "Scroll speed"));
+      const val = el("span", "transport__pace-val", String(state.autoscroll.speed));
+      head.appendChild(val);
+      pace.appendChild(head);
+      const speed = el("input", "transport__slider");
+      speed.type = "range";
+      speed.min = "1";
+      speed.max = "10";
+      speed.step = "1";
+      speed.value = String(state.autoscroll.speed);
+      speed.setAttribute("aria-label", "Scroll speed");
+      speed.addEventListener("input", () => {
+        state.autoscroll.speed = parseInt(speed.value, 10);
+        val.textContent = speed.value;
+      });
+      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
+      pace.appendChild(speed);
+    }
+    transportRow.appendChild(pace);
 
-      // Only shown once there's actually a choice to make: with sync points
-      // for whatever's currently playing, autoscroll follows the recording
-      // by default -- this is the escape hatch back to a fixed pace (a bad
-      // sync, or wanting to drill slower/faster than the recording).
-      // Either/or, not two independent switches, hence radios rather than
-      // checkboxes.
-      if (hasSyncAvailable()) {
-        const modes = el("div", "songsheet__scroll-modes");
-        [
-          { label: "Autoscroll", forceManual: false },
-          { label: "Fixed tempo", forceManual: true },
-        ].forEach(({ label, forceManual }) => {
-          const row = el("label", "songsheet__scroll-row");
-          row.appendChild(el("span", null, label));
-          const radio = el("input", "songsheet__scroll-toggle");
-          radio.type = "radio";
-          radio.name = "songsheet-scroll-mode";
-          radio.checked = !!state.autoscroll.forceManual === forceManual;
-          radio.addEventListener("change", () => {
-            state.autoscroll.forceManual = forceManual;
-            renderFab();
+    const audio = el("button", "transport__btn");
+    audio.type = "button";
+    audio.setAttribute("aria-label", "Audio");
+    audio.innerHTML = ICON_NOTE;
+    audio.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (window.GuitarAudioDock) window.GuitarAudioDock.toggleSources();
+    });
+    transportAudioBtn = audio;
+    syncAudioButton();
+    transportRow.appendChild(audio);
+
+    const display = el("button", "transport__btn transport__btn--text", "Aa");
+    display.type = "button";
+    display.setAttribute("aria-label", "Display");
+    display.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDisplaySheet();
+    });
+    transportRow.appendChild(display);
+  }
+
+  function syncAudioButton() {
+    if (!transportAudioBtn) return;
+    const on = !!(window.GuitarAudioDock && window.GuitarAudioDock.isActive());
+    transportAudioBtn.classList.toggle("is-on", on);
+    transportAudioBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  document.addEventListener("audiodockpanelchange", syncAudioButton);
+
+  /* ---- Display sheet: key, chords on/off, scroll mode --------------------
+     Everything that changes how the sheet reads, in one place instead of
+     spread over the song screen. ---- */
+  function openDisplaySheet() {
+    if (!state || !state.record) return;
+    const UI = window.GuitarUI;
+    UI.openSheet({
+      title: "Display",
+      render(body) {
+        const model = parseSheet(state.record.raw);
+        const key = (model.meta.key || "").trim();
+        body.appendChild(
+          UI.stepperRow(
+            "Key",
+            key ? "Original key " + key : "Semitones up or down",
+            (v) => (v > 0 ? "+" + v : v < 0 ? "−" + Math.abs(v) : "0"),
+            (delta) => {
+              if (delta) bumpTranspose(delta);
+              return state.record.transpose | 0;
+            }
+          )
+        );
+        body.appendChild(
+          UI.switchRow("Show chords", "Off leaves just the lyrics", showChordsPref(), (on) => {
+            saveShowChords(on);
+            render();
+          })
+        );
+
+        const head = el("h3", "ui-sheet__sub", "Scrolling");
+        body.appendChild(head);
+        if (hasSyncAvailable()) {
+          const seg = el("div", "seg");
+          seg.setAttribute("role", "group");
+          seg.setAttribute("aria-label", "Scroll mode");
+          [
+            { label: "Follow audio", forceManual: false },
+            { label: "Fixed tempo", forceManual: true },
+          ].forEach(({ label, forceManual }) => {
+            const b = el("button", "seg__btn", label);
+            b.type = "button";
+            b.setAttribute("aria-pressed", !!state.autoscroll.forceManual === forceManual ? "true" : "false");
+            b.addEventListener("click", () => {
+              state.autoscroll.forceManual = forceManual;
+              Array.from(seg.children).forEach((c) => c.setAttribute("aria-pressed", c === b ? "true" : "false"));
+              renderTransport();
+            });
+            seg.appendChild(b);
           });
-          row.appendChild(radio);
-          modes.appendChild(row);
-        });
-        menu.appendChild(modes);
-      }
-
-      if (effectiveSyncedMode()) {
-        menu.appendChild(el("p", "songsheet__scroll-status", "Synced with playback"));
-      } else {
-        const speedWrap = el("label", "songsheet__scroll-speed");
-        const speedHead = el("div", "songsheet__scroll-speed-head");
-        speedHead.appendChild(el("span", null, "Tempo"));
-        const speedVal = el("span", "songsheet__scroll-speed-val", String(state.autoscroll.speed));
-        speedHead.appendChild(speedVal);
-        speedWrap.appendChild(speedHead);
-        const speed = el("input", null);
+          body.appendChild(seg);
+        }
+        const wrap = el("label", "ui-row ui-row--range");
+        const top = el("div", "ui-row__text");
+        top.appendChild(el("span", null, "Fixed tempo speed"));
+        const val = el("b", null, String(state.autoscroll.speed));
+        top.appendChild(val);
+        wrap.appendChild(top);
+        const speed = el("input", "transport__slider");
         speed.type = "range";
         speed.min = "1";
         speed.max = "10";
@@ -1314,15 +1371,16 @@
         speed.value = String(state.autoscroll.speed);
         speed.addEventListener("input", () => {
           state.autoscroll.speed = parseInt(speed.value, 10);
-          speedVal.textContent = speed.value;
+          val.textContent = speed.value;
         });
-        speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
-        speedWrap.appendChild(speed);
-        menu.appendChild(speedWrap);
-      }
-
-      fab.appendChild(menu);
-    }
+        speed.addEventListener("change", () => {
+          saveScrollSpeed(state.autoscroll.speed);
+          renderTransport();
+        });
+        wrap.appendChild(speed);
+        body.appendChild(wrap);
+      },
+    });
   }
 
   function currentInstrument() {
@@ -1343,25 +1401,21 @@
       return;
     }
     const inst = currentInstrument();
-    // Always starts collapsed, unless a caller explicitly asks otherwise
-    // (js/setlists.js's "Play setlist" jumps straight to an expanded sheet)
-    // -- the detail page normally opens showing just the "Lyrics & chords"
-    // bar, above the external Chords/Tabs links.
+    // The sheet is simply there -- no collapsed state any more.
     state = {
       song,
       inst,
       record: loadSheet(inst, song.id),
       adding: false,
-      expanded: !!(opts && opts.expanded),
+      expanded: true,
       fetching: false,
       fetchError: null,
       candidates: null, // search results awaiting a pick, or null
       confirmRemove: false,
       syncMode: false,
       confirmClearSync: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false, menuOpen: false },
+      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false },
       playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
-      showAllChords: false,
     };
     migrateFetchedSheet();
     root.hidden = false;
@@ -1405,7 +1459,8 @@
     closeInlineChordPopover();
     state = null;
     panel = null;
-    renderFab();
+    clearChordStrip();
+    renderTransport();
     dispatchExpandEvent();
     root.hidden = true;
     root.textContent = "";
@@ -1423,6 +1478,7 @@
           expanded: !!(state && state.expanded),
           song: state ? state.song : null,
           inst: state ? state.inst : null,
+          hasSheet: !!(state && state.record),
           hasLyrics: !!(state && state.record && sheetHasLyrics(state.record.raw)),
         },
       })
@@ -1432,21 +1488,21 @@
   function render() {
     closeInlineChordPopover();
     if (!state) {
-      renderFab();
+      clearChordStrip();
+      renderTransport();
       dispatchExpandEvent();
       return;
     }
     root.textContent = "";
     panel = null;
-
-    root.appendChild(buildToggle());
-    renderFab();
-    dispatchExpandEvent();
-    if (!state.expanded) return;
+    root.classList.toggle("songsheet--nochords", !showChordsPref());
 
     panel = el("div", "songsheet__panel");
     root.appendChild(panel);
 
+    // Any chord strip belongs to a rendered sheet only -- renderSheet() fills
+    // it again below.
+    clearChordStrip();
     if (state.candidates) {
       renderCandidatePicker();
     } else if (!state.record) {
@@ -1456,35 +1512,8 @@
     } else {
       renderSheet();
     }
-  }
-
-  // The always-visible header: a disclosure button that expands/collapses the
-  // panel. When a sheet exists it also shows a small chord count as a nudge
-  // to open it.
-  function buildToggle() {
-    const btn = el("button", "songsheet__toggle");
-    btn.type = "button";
-    btn.setAttribute("aria-expanded", state.expanded ? "true" : "false");
-    btn.appendChild(el("span", "songsheet__toggle-label", "Lyrics & chords"));
-
-    if (state.record) {
-      const n = uniqueChords(parseSheet(state.record.raw)).length;
-      btn.appendChild(
-        el("span", "songsheet__toggle-note", n ? n + (n === 1 ? " chord" : " chords") : "added")
-      );
-    }
-
-    const chev = el("span", "songsheet__chev");
-    chev.setAttribute("aria-hidden", "true");
-    chev.innerHTML =
-      '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    btn.appendChild(chev);
-
-    btn.addEventListener("click", () => {
-      state.expanded = !state.expanded;
-      render();
-    });
-    return btn;
+    renderTransport();
+    dispatchExpandEvent();
   }
 
   function renderEmpty() {
@@ -1492,7 +1521,7 @@
       renderEditor("");
       return;
     }
-    panel.appendChild(el("p", "songsheet__sub", "Fetch the chords automatically, or paste a sheet yourself."));
+    panel.appendChild(el("p", "songsheet__sub", "No sheet for this song yet. Fetch the chords automatically, or paste one yourself."));
 
     const row = el("div", "songsheet__actions songsheet__actions--start");
     row.appendChild(fetchButton());
@@ -1590,11 +1619,11 @@
     panel.appendChild(list);
 
     const actions = el("div", "songsheet__actions songsheet__actions--start");
-    const cancel = el("button", "songsheet__btn", "None of these — paste a sheet");
+    const cancel = el("button", "songsheet__btn", state.record ? "Keep my current sheet" : "None of these — paste a sheet");
     cancel.type = "button";
     cancel.addEventListener("click", () => {
       state.candidates = null;
-      state.adding = true;
+      state.adding = !state.record;
       render();
     });
     actions.appendChild(cancel);
@@ -1788,244 +1817,197 @@
     setTimeout(() => ta.focus(), 30);
   }
 
+  // Sync mode, shared by the "..." menu (see getActions) and the "Done
+  // syncing" button in the bar: tapping lines to place timestamps while the
+  // view also scrolls out from under you doesn't work, so autoscroll goes off
+  // going in, and play along (which repurposes the same tap) gives way too.
+  function toggleSyncMode() {
+    if (!state || !state.record) return;
+    state.syncMode = !state.syncMode;
+    state.confirmClearSync = false;
+    if (state.syncMode) {
+      if (state.autoscroll.on) {
+        state.autoscroll.on = false;
+        stopAutoscroll();
+      }
+      stopPlayAlong();
+    }
+    render();
+  }
+
+  /* ---- Chord strip -------------------------------------------------------
+     Every chord in the song as a row of chips pinned under the top bar
+     (#detail-chordstrip), plus the capo. Tapping one opens its diagram in
+     #detail-chordcard right below the strip. ---- */
+  function chordStripEl() {
+    return document.getElementById("detail-chordstrip");
+  }
+  function chordCardEl() {
+    return document.getElementById("detail-chordcard");
+  }
+  function clearChordStrip() {
+    const strip = chordStripEl();
+    const card = chordCardEl();
+    if (strip) {
+      strip.hidden = true;
+      strip.textContent = "";
+    }
+    if (card) {
+      card.hidden = true;
+      card.textContent = "";
+    }
+  }
+
+  function renderChordStrip(model, chordSyms) {
+    const strip = chordStripEl();
+    const card = chordCardEl();
+    if (!strip || !card) return;
+    strip.textContent = "";
+    card.hidden = true;
+    card.textContent = "";
+    const capo = model.meta.capo;
+    if ((!chordSyms.length && !capo) || !showChordsPref()) {
+      strip.hidden = true;
+      return;
+    }
+    strip.hidden = false;
+
+    let openSym = null;
+    let swapMode = false;
+
+    function renderCard() {
+      card.textContent = "";
+      if (!openSym) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      const head = el("div", "songsheet__chipcard-head");
+      if (swapMode) {
+        const back = el("button", "songsheet__chip-swap", null);
+        back.type = "button";
+        back.setAttribute("aria-label", "Cancel swap");
+        back.innerHTML =
+          '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        back.addEventListener("click", (e) => {
+          e.stopPropagation();
+          swapMode = false;
+          renderCard();
+        });
+        head.appendChild(back);
+        head.appendChild(el("span", "songsheet__chipcard-title", "Swap " + openSym + " for…"));
+        card.appendChild(head);
+
+        const pickerHost = el("div", "songsheet__swap-picker");
+        card.appendChild(pickerHost);
+        if (window.GuitarChords && window.GuitarChords.renderSwapPicker) {
+          window.GuitarChords.renderSwapPicker(pickerHost, openSym, (newSym) => {
+            swapChord(openSym, newSym);
+          });
+        }
+      } else {
+        const swap = el("button", "songsheet__chip-swap", null);
+        swap.type = "button";
+        swap.title = "Swap this chord";
+        swap.setAttribute("aria-label", "Swap this chord");
+        swap.innerHTML =
+          '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h13l-3-3M20 17H7l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        swap.addEventListener("click", (e) => {
+          e.stopPropagation();
+          swapMode = true;
+          renderCard();
+        });
+        head.appendChild(swap);
+        card.appendChild(head);
+
+        const inner = el("div", "songsheet__chipcard-inner");
+        card.appendChild(inner);
+        const ok = window.GuitarChords && window.GuitarChords.renderInto
+          ? window.GuitarChords.renderInto(inner, openSym)
+          : false;
+        if (!ok && !inner.textContent) inner.textContent = "No diagram for " + openSym + ".";
+      }
+    }
+
+    chordSyms.forEach((sym) => {
+      const chip = el("button", "songsheet__chip", sym);
+      chip.type = "button";
+      chip.addEventListener("click", () => {
+        const wasOpen = openSym === sym;
+        openSym = wasOpen ? null : sym;
+        swapMode = false;
+        Array.from(strip.querySelectorAll(".songsheet__chip")).forEach((c) => c.classList.remove("is-active"));
+        if (!wasOpen) chip.classList.add("is-active");
+        renderCard();
+      });
+      strip.appendChild(chip);
+    });
+    if (capo) strip.appendChild(el("span", "songsheet__chips-capo", "Capo " + capo));
+  }
+
   function renderSheet() {
     const model = parseSheet(state.record.raw);
     const semis = state.record.transpose | 0;
     const shown = transposeModel(model, semis);
 
-    /* ---- toolbar: two rows so it doesn't feel like a wall of buttons --
-       the primary row (just Edit -- Remove now lives inside the editor
-       itself, see renderEditor) stays put; play along and sync are
-       secondary, so they sit in a quieter row underneath. Transpose moved
-       out of here entirely -- it's rendered below the chord overview
-       further down. Sync mode replaces all of that with just the two
-       buttons relevant to placing timestamps -- Edit/play-along would only
-       get in the way while tapping lines. ---- */
-    const bar = el("div", "songsheet__bar");
-
-    if (!state.syncMode) {
-      const primaryRow = el("div", "songsheet__bar-row");
-      const edit = el("button", "songsheet__btn songsheet__btn--sm", "Edit");
-      edit.type = "button";
-      edit.disabled = state.playAlong.on;
-      edit.addEventListener("click", () => {
-        state.adding = true;
-        render();
-      });
-      primaryRow.appendChild(edit);
-      bar.appendChild(primaryRow);
-    }
-
-    const secondaryRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary");
-
-    // Only shown in sync mode, and only once there's something to clear --
-    // removing points one at a time by tapping each time-badge is tedious
-    // once there are more than a couple. Placed left of "Done syncing" (see
-    // below), i.e. appended first. Outside sync mode, Sync leads and Play
-    // along follows it.
-    const activePlaybackForClear = state.syncMode ? getActivePlayback() : null;
-    const clearableCount = activePlaybackForClear ? getSyncPoints().length : 0;
-    if (state.syncMode && clearableCount > 0) {
-      if (state.confirmClearSync) {
-        const confirmWrap = el("div", "songsheet__confirm");
-        confirmWrap.appendChild(
-          el("span", "songsheet__confirm-label", "Clear all " + clearableCount + " timestamps?")
-        );
-        const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear");
-        yes.type = "button";
-        yes.addEventListener("click", () => {
-          clearAllSyncPoints();
-          state.confirmClearSync = false;
-        });
-        const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
-        no.type = "button";
-        no.addEventListener("click", () => {
-          state.confirmClearSync = false;
-          render();
-        });
-        confirmWrap.appendChild(yes);
-        confirmWrap.appendChild(no);
-        secondaryRow.appendChild(confirmWrap);
-      } else {
-        const clearSync = el("button", "songsheet__btn songsheet__btn--lg songsheet__btn--danger", "Clear timestamps");
-        clearSync.type = "button";
-        clearSync.addEventListener("click", () => {
-          state.confirmClearSync = true;
-          render();
-        });
-        secondaryRow.appendChild(clearSync);
-      }
-    }
-
-    const syncBtn = el(
-      "button",
-      "songsheet__btn" + (state.syncMode ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
-      state.syncMode ? "Done syncing" : "Sync"
-    );
-    syncBtn.type = "button";
-    syncBtn.addEventListener("click", () => {
-      state.syncMode = !state.syncMode;
-      state.confirmClearSync = false;
-      // Tapping lines to place timestamps while the view is also scrolling
-      // out from under you doesn't work -- turn autoscroll off going in.
-      // Play along repurposes the same tap for its own jump-to override, so
-      // it has to give way too.
+    // Only the two temporary modes get a bar of their own -- placing sync
+    // timestamps and play along. Everything else lives in the transport bar
+    // (autoscroll, audio, display) or the song's "..." menu (edit, find
+    // another sheet), so a plain sheet starts straight with the lyrics.
+    renderFetchStatus(panel);
+    if (state.syncMode || state.playAlong.on) {
+      const bar = el("div", "songsheet__bar");
+      const row = el("div", "songsheet__bar-row");
       if (state.syncMode) {
-        if (state.autoscroll.on) {
-          state.autoscroll.on = false;
-          state.autoscroll.menuOpen = false;
-          stopAutoscroll();
-        }
-        stopPlayAlong();
-      }
-      render();
-    });
-    secondaryRow.appendChild(syncBtn);
-
-    if (!state.syncMode) {
-      const chordSymsForPlayAlong = uniqueChords(shown);
-      const playBtn = el(
-        "button",
-        "songsheet__btn" + (state.playAlong.on ? " songsheet__btn--lg is-active" : " songsheet__btn--sm"),
-        state.playAlong.on ? "Stop play along" : "Play along"
-      );
-      playBtn.type = "button";
-      playBtn.disabled = !chordSymsForPlayAlong.length;
-      playBtn.addEventListener("click", () => togglePlayAlong());
-      secondaryRow.appendChild(playBtn);
-    }
-
-    bar.appendChild(secondaryRow);
-    panel.appendChild(bar);
-
-    /* ---- chord chips + a slot for the tapped chord's diagram ---- */
-    const chordSyms = uniqueChords(shown);
-    if (model.meta.capo && !chordSyms.length) {
-      panel.appendChild(el("p", "songsheet__meta", "Capo " + model.meta.capo));
-    }
-    if (chordSyms.length) {
-      const chipsHead = el("div", "songsheet__chipshead");
-      chipsHead.appendChild(el("span", "songsheet__chipshead-label", "Chords"));
-      // Only the first few chords are chips by default; "Show all" reveals
-      // the rest (and hides the capo note that sits beside the short list).
-      if (chordSyms.length > COLLAPSED_CHIP_COUNT) {
-        const allBtn = el("button", "songsheet__btn songsheet__btn--sm", state.showAllChords ? "Show less" : "Show all");
-        allBtn.type = "button";
-        allBtn.addEventListener("click", () => {
-          state.showAllChords = !state.showAllChords;
-          render();
-        });
-        chipsHead.appendChild(allBtn);
-      }
-      panel.appendChild(chipsHead);
-    }
-
-    if (chordSyms.length) {
-      const chips = el("div", "songsheet__chips");
-      const card = el("div", "songsheet__chipcard");
-      card.hidden = true;
-      let openSym = null;
-      let swapMode = false;
-
-      function renderCard() {
-        card.textContent = "";
-        if (!openSym) return;
-        const head = el("div", "songsheet__chipcard-head");
-        if (swapMode) {
-          const back = el("button", "songsheet__chip-swap", null);
-          back.type = "button";
-          back.setAttribute("aria-label", "Cancel swap");
-          back.innerHTML =
-            '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-          back.addEventListener("click", (e) => {
-            e.stopPropagation();
-            swapMode = false;
-            renderCard();
-          });
-          head.appendChild(back);
-          head.appendChild(el("span", "songsheet__chipcard-title", "Swap " + openSym + " for…"));
-          card.appendChild(head);
-
-          const pickerHost = el("div", "songsheet__swap-picker");
-          card.appendChild(pickerHost);
-          if (window.GuitarChords && window.GuitarChords.renderSwapPicker) {
-            window.GuitarChords.renderSwapPicker(pickerHost, openSym, (newSym) => {
-              swapChord(openSym, newSym);
+        const activePlaybackForClear = getActivePlayback();
+        const clearableCount = activePlaybackForClear ? getSyncPoints().length : 0;
+        if (clearableCount > 0) {
+          if (state.confirmClearSync) {
+            const confirmWrap = el("div", "songsheet__confirm");
+            confirmWrap.appendChild(
+              el("span", "songsheet__confirm-label", "Clear all " + clearableCount + " timestamps?")
+            );
+            const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear");
+            yes.type = "button";
+            yes.addEventListener("click", () => {
+              clearAllSyncPoints();
+              state.confirmClearSync = false;
             });
+            const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
+            no.type = "button";
+            no.addEventListener("click", () => {
+              state.confirmClearSync = false;
+              render();
+            });
+            confirmWrap.appendChild(yes);
+            confirmWrap.appendChild(no);
+            row.appendChild(confirmWrap);
+          } else {
+            const clearSync = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear timestamps");
+            clearSync.type = "button";
+            clearSync.addEventListener("click", () => {
+              state.confirmClearSync = true;
+              render();
+            });
+            row.appendChild(clearSync);
           }
-        } else {
-          const swap = el("button", "songsheet__chip-swap", null);
-          swap.type = "button";
-          swap.title = "Swap this chord";
-          swap.setAttribute("aria-label", "Swap this chord");
-          swap.innerHTML =
-            '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h13l-3-3M20 17H7l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-          swap.addEventListener("click", (e) => {
-            e.stopPropagation();
-            swapMode = true;
-            renderCard();
-          });
-          head.appendChild(swap);
-          card.appendChild(head);
-
-          const inner = el("div", "songsheet__chipcard-inner");
-          card.appendChild(inner);
-          const ok = window.GuitarChords && window.GuitarChords.renderInto
-            ? window.GuitarChords.renderInto(inner, openSym)
-            : false;
-          if (!ok && !inner.textContent) inner.textContent = "No diagram for " + openSym + ".";
         }
+        const done = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Done syncing");
+        done.type = "button";
+        done.addEventListener("click", toggleSyncMode);
+        row.appendChild(done);
+      } else {
+        const stop = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Stop play along");
+        stop.type = "button";
+        stop.addEventListener("click", () => togglePlayAlong());
+        row.appendChild(stop);
       }
-
-      const visibleSyms = state.showAllChords ? chordSyms : chordSyms.slice(0, COLLAPSED_CHIP_COUNT);
-      visibleSyms.forEach((sym) => {
-        const chip = el("button", "songsheet__chip", sym);
-        chip.type = "button";
-        chip.addEventListener("click", () => {
-          if (openSym === sym) {
-            openSym = null;
-            swapMode = false;
-            card.hidden = true;
-            chip.classList.remove("is-active");
-            renderCard();
-            return;
-          }
-          openSym = sym;
-          swapMode = false;
-          Array.from(chips.children).forEach((c) => c.classList.remove("is-active"));
-          chip.classList.add("is-active");
-          card.hidden = false;
-          renderCard();
-        });
-        chips.appendChild(chip);
-      });
-      if (model.meta.capo && !state.showAllChords) {
-        chips.appendChild(el("span", "songsheet__chips-capo", "– Capo " + model.meta.capo));
-      }
-      panel.appendChild(chips);
-      panel.appendChild(card);
+      bar.appendChild(row);
+      panel.appendChild(bar);
     }
 
-    // Transpose sits right under the chord overview it affects, out of the
-    // toolbar entirely -- hidden in sync/play-along mode same as before.
-    if (!state.syncMode && !state.playAlong.on) {
-      const tpRow = el("div", "songsheet__bar-row songsheet__bar-row--secondary songsheet__transpose-row");
-      const tp = el("div", "songsheet__transpose");
-      const minus = el("button", "songsheet__step", "−");
-      minus.type = "button";
-      minus.setAttribute("aria-label", "Transpose down");
-      const plus = el("button", "songsheet__step", "+");
-      plus.type = "button";
-      plus.setAttribute("aria-label", "Transpose up");
-      const amount = el("span", "songsheet__transpose-val", semis > 0 ? "+" + semis : String(semis));
-      minus.addEventListener("click", () => bumpTranspose(-1));
-      plus.addEventListener("click", () => bumpTranspose(1));
-      tp.appendChild(minus);
-      tp.appendChild(amount);
-      tp.appendChild(plus);
-      tpRow.appendChild(tp);
-      panel.appendChild(tpRow);
-    }
+    const chordSyms = uniqueChords(shown);
+    renderChordStrip(model, chordSyms);
 
     if (state.syncMode) {
       const activeForHint = getActivePlayback();
@@ -2035,7 +2017,7 @@
           "songsheet__sub",
           activeForHint
             ? "Tap the line playing right now to link it to this moment in the song. Tap a time label to remove that timestamp."
-            : "Start Spotify or a YouTube backing track above to be able to set timestamps."
+            : "Start Spotify or a YouTube backing track with the ♪ button below to be able to set timestamps."
         )
       );
     }
@@ -2411,7 +2393,35 @@
   // (follower side) reuses parseSheet/transposeModel/renderLine/
   // buildChordSteps/uniqueChords to render a received sheet exactly the way
   // this file renders the host's own, without duplicating that logic.
+  // What the song's "..." menu (js/library.js) offers for the open sheet.
+  function getActions() {
+    const has = !!(state && state.record);
+    const lyrics = has && sheetHasLyrics(state.record.raw);
+    return {
+      hasSheet: has,
+      hasLyrics: !!lyrics,
+      hasChords: has && uniqueChords(parseSheet(state.record.raw)).length > 0,
+      syncMode: !!(state && state.syncMode),
+      playAlongOn: !!(state && state.playAlong.on),
+      edit() {
+        if (!state) return;
+        stopPlayAlong();
+        state.syncMode = false;
+        state.adding = true;
+        render();
+      },
+      toggleSync: toggleSyncMode,
+      togglePlayAlong() {
+        if (state && state.record) togglePlayAlong();
+      },
+      fetchNew() {
+        if (state) doFetch();
+      },
+    };
+  }
+
   window.GuitarSongSheet = {
+    getActions,
     open,
     close,
     getJamSnapshot,

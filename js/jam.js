@@ -1,4 +1,4 @@
-// Guitar — "samen jammen": follow someone's lyrics & chords scroll live.
+// Guitar — jam: follow someone's lyrics & chords scroll live.
 //
 // Host: broadcasts what js/songsheet.js's getJamSnapshot() says it's
 // currently showing (which song, which of the three autoscroll flavors --
@@ -781,7 +781,7 @@
   }
 
   /* =====================================================================
-     Settings-page UI (start/join) + the persistent island
+     Jam-page UI (start/join) + the banner
      ===================================================================== */
 
   const settingsEls = {
@@ -832,28 +832,24 @@
     }
   }
 
-  // Where the pill is allowed to show, and where exactly it sits within
-  // that spot -- it has no position of its own any more (see .jam-island in
-  // css/style.css), so js/app.js's current page and js/library.js's detail
-  // overlay both have to be checked fresh on every render, not just once.
+  // Where the banner is allowed to show: in the open song's own sub row
+  // while a song is open, otherwise at the top of every tab except Jam itself
+  // (the Jam tab already shows the jam in full). It has no position of its
+  // own, so js/app.js's current page and js/library.js's song screen are both
+  // checked fresh on every render.
   function placeJamIsland(island) {
     if (window.GuitarLibrary && window.GuitarLibrary.isDetailOpen && window.GuitarLibrary.isDetailOpen()) {
-      const detail = document.getElementById("song-detail");
-      if (detail) {
-        if (island.parentElement !== detail || island !== detail.firstChild) {
-          detail.insertBefore(island, detail.firstChild);
-        }
+      const slot = document.getElementById("detail-sub");
+      if (slot) {
+        if (island.parentElement !== slot) slot.appendChild(island);
         return true;
       }
     }
     const page = window.GuitarApp && window.GuitarApp.getCurrentPage ? window.GuitarApp.getCurrentPage() : null;
-    if (page === "library") {
-      const header = document.querySelector("#page-library .library__header");
-      const actions = document.querySelector("#page-library .library__actions");
-      if (header && actions) {
-        if (island.nextElementSibling !== actions || island.parentElement !== header) {
-          header.insertBefore(island, actions);
-        }
+    if (page && page !== "jam") {
+      const home = document.getElementById("page-container");
+      if (home) {
+        if (island.parentElement !== home || island !== home.firstChild) home.insertBefore(island, home.firstChild);
         return true;
       }
     }

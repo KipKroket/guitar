@@ -9,29 +9,26 @@
 // drop out of any setlist that referenced it (no dangling copies to keep in
 // sync).
 //
-// Screens (three overlays, reusing the exact same .overlay shell as
-// js/library.js's own search/detail overlays -- see index.html):
-//   - #setlists-overlay      every saved setlist, "+" makes a new one
-//   - #setlist-detail-overlay  one setlist's songs -- Play / Organize / +
-//   - #setlist-add-overlay   picker: toggle songs already in your library,
-//                             then "Save" to store the selection
-// Exactly one of these (and library.js's own overlays) is ever visible at a
-// time -- opening one hides whichever else was open, same discipline
-// library.js already uses for its own two.
+// Screens:
+//   - the Setlists tab (#page-setlists)  every saved setlist as a card, "+" makes a new one
+//   - #setlist-detail-overlay  one setlist's songs -- Play / Add songs, and a
+//                              "..." menu for Reorder / Rename / Delete
+//   - #setlist-add-overlay     picker: toggle songs already in your library,
+//                              then "Save" to store the selection
+// Exactly one of the two overlays (and library.js's own) is ever visible at a
+// time -- opening one hides whichever else was open.
 //
 // Opening a song FROM a setlist reuses js/library.js's own openDetail() --
-// the only thing this file changes about that page is where "back" lands
+// the only thing this file changes about that screen is where "back" lands
 // (see onDetailBack, wired into library.js's own back button) and, while a
-// "Play setlist" session is running, a floating prev/next control (see
-// setlist-playbar below).
+// "Play setlist" session is running, a small prev/next control in the song
+// screen's sub row (see setlist-playbar below).
 (function () {
-  const setlistsOpenBtn = document.getElementById("setlists-open-btn");
-  const setlistsOverlay = document.getElementById("setlists-overlay");
-  if (!setlistsOpenBtn || !setlistsOverlay) return;
-  const setlistsBackBtn = document.getElementById("setlists-back");
   const setlistsNewBtn = document.getElementById("setlists-new-btn");
   const setlistsListEl = document.getElementById("setlists-list");
   const setlistsEmptyEl = document.getElementById("setlists-empty");
+  const setlistsCountEl = document.getElementById("setlists-count");
+  if (!setlistsListEl) return;
   const newForm = document.getElementById("setlist-new-form");
   const newNameInput = document.getElementById("setlist-new-name");
   const newCancelBtn = document.getElementById("setlist-new-cancel");
@@ -39,7 +36,10 @@
   const slOverlay = document.getElementById("setlist-detail-overlay");
   const slBackBtn = document.getElementById("setlist-detail-back");
   const slTitleEl = document.getElementById("setlist-detail-title");
-  const slDeleteBtn = document.getElementById("setlist-detail-delete-btn");
+  const slMenuBtn = document.getElementById("setlist-detail-menu-btn");
+  const renameForm = document.getElementById("setlist-rename-form");
+  const renameInput = document.getElementById("setlist-rename-name");
+  const renameCancelBtn = document.getElementById("setlist-rename-cancel");
   const slAddSongsBtn = document.getElementById("setlist-add-songs-btn");
   const slPlayBtn = document.getElementById("setlist-play-btn");
   const slOrganizeBtn = document.getElementById("setlist-organize-btn");
@@ -181,19 +181,17 @@
   // which would otherwise end the very session that transition belongs to.
   let internalTransition = false;
 
-  function syncSettingsFab() {
-    if (window.GuitarLibrary && window.GuitarLibrary.syncSettingsFab) window.GuitarLibrary.syncSettingsFab();
-  }
-
   function anyOverlayOpen() {
-    return !setlistsOverlay.hidden || !slOverlay.hidden || !addOverlay.hidden;
+    return !slOverlay.hidden || !addOverlay.hidden;
   }
 
+  // Leaves every setlist overlay (not the Setlists tab itself, which is an
+  // ordinary page) and drops any half-finished state.
   function closeAll() {
-    setlistsOverlay.hidden = true;
     slOverlay.hidden = true;
     addOverlay.hidden = true;
     newForm.hidden = true;
+    renameForm.hidden = true;
     slDeleteConfirm.hidden = true;
     organizing = false;
     stagedIds = null;
@@ -202,49 +200,60 @@
     pendingSetlistId = null;
     returnTarget = null;
     endPlaySession();
-    syncSettingsFab();
+    if (window.GuitarUI) window.GuitarUI.close();
   }
 
   /* ---------------- Setlists overview ---------------- */
 
+  // Back on the Setlists tab, e.g. after leaving a setlist or deleting one.
   function openSetlistsOverview() {
     slOverlay.hidden = true;
     addOverlay.hidden = true;
     newForm.hidden = true;
-    setlistsOverlay.hidden = false;
     renderSetlistsList();
-    syncSettingsFab();
+    if (window.GuitarApp && window.GuitarApp.getCurrentPage() !== "setlists") window.GuitarApp.showPage("setlists");
   }
 
   function renderSetlistsList() {
     const lists = readSetlists().sort((a, b) => b.updatedAt - a.updatedAt);
     setlistsListEl.textContent = "";
     setlistsEmptyEl.hidden = lists.length > 0;
+    setlistsCountEl.textContent = lists.length === 0 ? "" : lists.length === 1 ? "1 setlist" : lists.length + " setlists";
     lists.forEach((sl) => {
+      const songs = resolvedSongs(sl);
       const li = document.createElement("li");
-      li.className = "song-item";
-      const info = document.createElement("div");
-      info.className = "song-item__info";
-      const title = document.createElement("div");
-      title.className = "song-item__title";
+      li.className = "setlist-card";
+
+      // A small collage of the first few covers -- tells sets apart at a glance.
+      const mosaic = document.createElement("span");
+      mosaic.className = "setlist-card__mosaic";
+      for (let i = 0; i < 4; i++) {
+        const cell = document.createElement("i");
+        const art = songs[i] && songs[i].artworkUrl;
+        if (art) cell.style.backgroundImage = "url(\"" + art.replace(/"/g, "%22") + "\")";
+        mosaic.appendChild(cell);
+      }
+      li.appendChild(mosaic);
+
+      const text = document.createElement("span");
+      text.className = "setlist-card__text";
+      const title = document.createElement("b");
       title.textContent = sl.name;
-      const sub = document.createElement("div");
-      sub.className = "song-item__artist";
+      const sub = document.createElement("span");
       sub.textContent = sl.songIds.length === 1 ? "1 song" : sl.songIds.length + " songs";
-      info.appendChild(title);
-      info.appendChild(sub);
-      li.appendChild(info);
+      text.appendChild(title);
+      text.appendChild(sub);
+      li.appendChild(text);
+
+      const chev = document.createElement("span");
+      chev.className = "setlist-card__chev";
+      chev.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      li.appendChild(chev);
+
       li.addEventListener("click", () => openSetlistDetail(sl.id));
       setlistsListEl.appendChild(li);
     });
   }
-
-  setlistsOpenBtn.addEventListener("click", openSetlistsOverview);
-  setlistsBackBtn.addEventListener("click", () => {
-    setlistsOverlay.hidden = true;
-    newForm.hidden = true;
-    syncSettingsFab();
-  });
 
   setlistsNewBtn.addEventListener("click", () => {
     newForm.hidden = !newForm.hidden;
@@ -262,6 +271,7 @@
     if (!name) return;
     const sl = createSetlist(name);
     newForm.hidden = true;
+    renderSetlistsList();
     openSetlistDetail(sl.id);
   });
 
@@ -271,11 +281,10 @@
     if (!getSetlist(setlistId)) return;
     openSetlistId = setlistId;
     organizing = false;
-    setlistsOverlay.hidden = true;
     addOverlay.hidden = true;
+    renameForm.hidden = true;
     slOverlay.hidden = false;
     renderSetlistDetail();
-    syncSettingsFab();
   }
 
   function renderSetlistDetail() {
@@ -283,15 +292,16 @@
     if (!sl) {
       // Deleted from under us (or a stale id) -- fall back to the overview
       // rather than showing an empty, un-openable page.
-      openSetlistsOverview();
+      slOverlay.hidden = true;
+      renderSetlistsList();
       return;
     }
     slTitleEl.textContent = sl.name;
     slDeleteConfirm.hidden = true;
-    slOrganizeBtn.textContent = organizing ? "Done" : "Organize";
-    slOrganizeBtn.classList.toggle("is-active", organizing);
+    // While reordering, "Done" takes the place of Play / Add songs.
+    slOrganizeBtn.hidden = !organizing;
     slAddSongsBtn.hidden = organizing;
-    slDeleteBtn.hidden = organizing;
+    slPlayBtn.hidden = organizing;
 
     const songs = resolvedSongs(sl);
     slPlayBtn.disabled = songs.length === 0;
@@ -317,18 +327,67 @@
     slOverlay.hidden = true;
     openSetlistId = null;
     organizing = false;
-    setlistsOverlay.hidden = false;
+    renameForm.hidden = true;
     renderSetlistsList();
-    syncSettingsFab();
   });
 
   slOrganizeBtn.addEventListener("click", () => {
-    organizing = !organizing;
+    organizing = false;
     renderSetlistDetail();
   });
 
-  slDeleteBtn.addEventListener("click", () => {
-    slDeleteConfirm.hidden = false;
+  // Everything you do now and then to a setlist.
+  slMenuBtn.addEventListener("click", () => {
+    const sl = getSetlist(openSetlistId);
+    if (!sl) return;
+    const hasSongs = resolvedSongs(sl).length > 0;
+    window.GuitarUI.openMenu(slMenuBtn, [
+      {
+        label: "Reorder songs",
+        icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 5v14M8 5 5 8M8 5l3 3M16 19V5M16 19l-3-3M16 19l3-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        hidden: !hasSongs,
+        onClick: () => {
+          organizing = true;
+          renderSetlistDetail();
+        },
+      },
+      {
+        label: "Rename",
+        icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17.2V20z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+        onClick: () => {
+          renameForm.hidden = false;
+          renameInput.value = sl.name;
+          renameInput.focus();
+          renameInput.select();
+        },
+      },
+      { divider: true },
+      {
+        label: "Delete setlist",
+        icon: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 7h14M9 7V5.2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7m-8 0 .7 12.2a1 1 0 0 0 1 .8h6.600a1 1 0 0 0 1-.8L17 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+        danger: true,
+        onClick: () => {
+          slDeleteConfirm.hidden = false;
+        },
+      },
+    ]);
+  });
+
+  renameCancelBtn.addEventListener("click", () => {
+    renameForm.hidden = true;
+  });
+  renameForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = renameInput.value.trim();
+    if (!name || !openSetlistId) return;
+    const list = readSetlists();
+    const sl = list.find((x) => x.id === openSetlistId);
+    if (!sl) return;
+    sl.name = name;
+    sl.updatedAt = Date.now();
+    writeSetlists(list);
+    renameForm.hidden = true;
+    renderSetlistDetail();
   });
   slDeleteNoBtn.addEventListener("click", () => {
     slDeleteConfirm.hidden = true;
@@ -337,7 +396,8 @@
     if (!openSetlistId) return;
     deleteSetlist(openSetlistId);
     openSetlistId = null;
-    openSetlistsOverview();
+    slOverlay.hidden = true;
+    renderSetlistsList();
   });
 
   slAddSongsBtn.addEventListener("click", () => {
@@ -563,7 +623,6 @@
     addFilterInput.value = "";
     renderAddList(setlistId, "");
     setSaveBar(true);
-    syncSettingsFab();
   }
 
   function renderAddList(setlistId, query) {
@@ -617,19 +676,15 @@
     addOverlay.hidden = true;
     slOverlay.hidden = false;
     renderSetlistDetail();
-    syncSettingsFab();
   }
 
   addBackBtn.addEventListener("click", leaveAddSongs);
 
   /* ---------------- Play setlist ----------------
-     Opens the first song straight into its expanded lyrics/chords view
-     (js/songsheet.js's opts.expanded), then a small floating prev/next
-     (see .setlist-playbar in style.css) steps through the rest without
-     detouring back through the setlist page each time. Deliberately its
-     own floating control, not a takeover of .bottom-nav like the audio
-     dock's now-playing bar -- the two need to coexist (playing a backing
-     track *while* running the setlist is the whole point). */
+     Opens the first song straight into its lyrics/chords view, then a small
+     prev/next control (see .setlist-playbar in style.css) in the song
+     screen's sub row steps through the rest without detouring back through
+     the setlist each time. */
 
   let playbarEl = null;
 
@@ -663,15 +718,14 @@
     playbarEl._prev = prev;
     playbarEl._next = next;
     playbarEl._count = count;
-    // A child of .bottom-nav, same anchoring trick as .songsheet__fab --
-    // bottom:100% of that exact element always lands right on its top edge.
-    (document.querySelector(".bottom-nav") || document.querySelector(".app") || document.body).appendChild(playbarEl);
+    const slot = document.getElementById("detail-sub") || document.body;
+    slot.insertBefore(playbarEl, slot.firstChild);
     return playbarEl;
   }
 
   function renderPlaybar() {
     if (!playSession || !playbarEl) return;
-    playbarEl._count.textContent = playSession.index + 1 + " / " + playSession.songs.length;
+    playbarEl._count.textContent = playSession.index + 1 + " of " + playSession.songs.length;
     playbarEl._prev.disabled = playSession.index <= 0;
     playbarEl._next.disabled = playSession.index >= playSession.songs.length - 1;
   }
@@ -685,7 +739,6 @@
 
   function startPlaySession(setlistId, songs, index) {
     playSession = { setlistId, songs, index };
-    setlistsOverlay.hidden = true;
     slOverlay.hidden = true;
     ensurePlaybar();
     window.GuitarLibrary.openDetail(songs[index], { expanded: true });
@@ -768,12 +821,81 @@
 
   // A sync or import may have changed the lists under an open overview.
   document.addEventListener("setlistsapplied", () => {
-    if (!setlistsOverlay.hidden) renderSetlistsList();
-    else if (!slOverlay.hidden) {
+    renderSetlistsList();
+    if (!slOverlay.hidden) {
       if (getSetlist(openSetlistId)) renderSetlistDetail();
-      else openSetlistsOverview();
+      else {
+        slOverlay.hidden = true;
+      }
     }
   });
 
-  window.GuitarSetlists = { notifySongSaved, onDetailBack, anyOverlayOpen, closeAll };
+  // Keep the Setlists tab fresh whenever it is opened or the instrument changes.
+  document.addEventListener("pagechange", (e) => {
+    if (e.detail && e.detail.page === "setlists") renderSetlistsList();
+  });
+  document.addEventListener("instrumentchange", renderSetlistsList);
+
+  /* ---------------- Add the open song to a setlist (song screen's ... menu) ---------------- */
+  function openPicker(song) {
+    if (!song) return;
+    window.GuitarUI.openSheet({
+      title: "Add to setlist",
+      render(body, api) {
+        function draw() {
+          body.textContent = "";
+          const lists = readSetlists().sort((a, b) => b.updatedAt - a.updatedAt);
+          lists.forEach((sl) => {
+            const has = sl.songIds.includes(song.id);
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "ui-listrow" + (has ? " is-on" : "");
+            const name = document.createElement("span");
+            name.textContent = sl.name;
+            const mark = document.createElement("span");
+            mark.className = "ui-listrow__mark";
+            mark.innerHTML = has
+              ? '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 13l4.5 4.5L19 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+              : '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+            row.appendChild(name);
+            row.appendChild(mark);
+            row.addEventListener("click", () => {
+              if (has) removeSongFromSetlist(sl.id, song.id);
+              else addSongToSetlist(sl.id, song.id);
+              draw();
+            });
+            body.appendChild(row);
+          });
+          const create = document.createElement("form");
+          create.className = "ui-inline-form";
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "custom-song__input";
+          input.placeholder = lists.length ? "New setlist…" : "Name your first setlist";
+          input.maxLength = 60;
+          input.setAttribute("aria-label", "New setlist name");
+          const add = document.createElement("button");
+          add.type = "submit";
+          add.className = "songsheet__btn songsheet__btn--primary";
+          add.textContent = "Create";
+          create.appendChild(input);
+          create.appendChild(add);
+          create.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const name = input.value.trim();
+            if (!name) return;
+            const sl = createSetlist(name);
+            addSongToSetlist(sl.id, song.id);
+            draw();
+          });
+          body.appendChild(create);
+        }
+        draw();
+      },
+    });
+  }
+
+  renderSetlistsList();
+
+  window.GuitarSetlists = { notifySongSaved, onDetailBack, anyOverlayOpen, closeAll, openPicker };
 })();

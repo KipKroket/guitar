@@ -20,33 +20,32 @@
 
 <div class="app">
 
-  <!-- Persistent Settings button: top-left on every page (hidden on the
-       Settings page itself, which has its own back arrow). -->
-  <button id="settings-fab" class="settings-fab" type="button" aria-label="Settings">
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.48.48 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-  </button>
-
-  <!-- Persistent "jam is active" pill (host or follower), near the gear --
-       see js/jam.js. Hidden whenever no jam is running. -->
-  <div id="jam-island" class="jam-island" hidden></div>
-
   <!-- Follower's full-screen jam view -- replaces the whole app (no bottom
        nav) while following someone else's jam. See js/jam.js. -->
   <div id="jam-view" class="jam-view" hidden></div>
 
   <main id="page-container">
 
+    <!-- "A jam is running" banner. js/jam.js moves this node between here
+         (every tab except Jam itself) and a song's own top bar. -->
+    <div id="jam-island" class="jam-island" hidden></div>
+
+    <!-- TOOLS header: one title + one switch for Tuner / Metronome / Chords.
+         Shown by js/app.js whenever one of those three pages is open. -->
+    <div class="tools-head" id="tools-head" hidden>
+      <div class="page-head">
+        <h1 class="page-title">Tools</h1>
+      </div>
+      <div class="seg" id="tools-seg" role="group" aria-label="Tool">
+        <button type="button" class="seg__btn seg__btn--tuner" data-tool="tuner">Tuner</button>
+        <button type="button" class="seg__btn" data-tool="metronome">Metronome</button>
+        <button type="button" class="seg__btn" data-tool="chords">Chords</button>
+      </div>
+    </div>
+
     <!-- TUNER -->
     <section class="page" id="page-tuner" data-page="tuner" hidden>
       <div class="tuner">
-
-        <div class="tuner__mic-row">
-          <button id="mic-toggle" class="mic-button" type="button" aria-pressed="false">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 19v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            <span id="mic-toggle-label">Start tuning</span>
-          </button>
-          <p class="tuner__hint" id="tuner-hint">Tap start and play a single string.</p>
-        </div>
 
         <svg id="meter" class="meter" viewBox="0 0 300 180" role="img" aria-label="Tuning meter">
           <path id="meter-track" d="M20 160 A130 130 0 0 1 280 160" fill="none" stroke-width="10" stroke-linecap="round"/>
@@ -66,8 +65,8 @@
 
         <div class="tuner__strings" id="string-targets" aria-hidden="true"></div>
 
-        <div class="field-row">
-          <label for="tuning-select">Tuning</label>
+        <label class="pill-select" for="tuning-select">
+          <span>Tuning</span>
           <select id="tuning-select">
             <option value="standard" selected>Standard (E A D G B E)</option>
             <option value="dropD">Drop D</option>
@@ -75,7 +74,15 @@
             <option value="openD">Open D</option>
             <option value="halfStepDown">Half Step Down</option>
           </select>
-        </div>
+        </label>
+      </div>
+
+      <div class="tool-action">
+        <p class="tuner__hint" id="tuner-hint">Tap start and play a single string.</p>
+        <button id="mic-toggle" class="mic-button" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 19v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span id="mic-toggle-label">Start tuning</span>
+        </button>
       </div>
     </section>
 
@@ -100,20 +107,23 @@
           <button id="metro-bpm-plus" class="metro-step" type="button" aria-label="Increase tempo">+</button>
         </div>
 
-        <button id="metro-tap" class="tap-button" type="button">Tap tempo</button>
-
-        <div class="field-row">
-          <label for="metro-signature">Time signature</label>
-          <select id="metro-signature">
-            <option value="2/4">2/4</option>
-            <option value="3/4">3/4</option>
-            <option value="4/4" selected>4/4</option>
-            <option value="5/4">5/4</option>
-            <option value="6/8">6/8</option>
-            <option value="7/8">7/8</option>
-          </select>
+        <div class="metronome__options">
+          <button id="metro-tap" class="tap-button" type="button">Tap tempo</button>
+          <label class="pill-select" for="metro-signature">
+            <span>Time</span>
+            <select id="metro-signature">
+              <option value="2/4">2/4</option>
+              <option value="3/4">3/4</option>
+              <option value="4/4" selected>4/4</option>
+              <option value="5/4">5/4</option>
+              <option value="6/8">6/8</option>
+              <option value="7/8">7/8</option>
+            </select>
+          </label>
         </div>
+      </div>
 
+      <div class="tool-action">
         <button id="metro-toggle" class="mic-button metronome__toggle" type="button" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path id="metro-toggle-icon" d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>
           <span id="metro-toggle-label">Start</span>
@@ -121,228 +131,80 @@
       </div>
     </section>
 
-    <!-- LIBRARY -->
+    <!-- SONGS (the library) -->
     <section class="page" id="page-library" data-page="library">
       <div class="library">
-        <div class="library__header">
-          <div class="library__actions">
-            <button id="instrument-toggle" class="instrument-switch" type="button" role="switch" aria-checked="false" aria-label="Switch between guitar and piano">
-              <span class="instrument-switch__icon instrument-switch__icon--guitar" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="15" height="15">
-                  <path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                  <path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                  <line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                </svg>
-              </span>
-              <span class="instrument-switch__icon instrument-switch__icon--piano" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="15" height="15">
-                  <rect x="3" y="5" width="18" height="14" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/>
-                  <path d="M8 5v9M12 5v9M16 5v9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-              </span>
-              <span class="instrument-switch__thumb" aria-hidden="true"></span>
-            </button>
-            <button id="setlists-open-btn" class="setlists-open-btn" type="button" aria-label="Setlists">
-              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 6h13M4 12h13M4 18h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="20" cy="6" r="1.6" fill="currentColor"/><circle cx="20" cy="12" r="1.6" fill="currentColor"/></svg>
-              <span>Setlists</span>
-            </button>
-            <button id="library-add-btn" class="add-button" type="button" aria-label="Add song">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </button>
+        <div class="page-head">
+          <div class="page-head__text">
+            <h1 class="page-title">Songs</h1>
+            <p class="page-sub" id="library-count"></p>
           </div>
+          <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.48.48 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <div class="library__search">
+          <label class="search-field">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.2-4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <input id="library-filter" type="search" placeholder="Search your songs" autocomplete="off" aria-label="Search your songs">
+          </label>
+          <button id="library-add-btn" class="add-button" type="button" aria-label="Add song">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="filter-chips" id="library-chips" role="group" aria-label="Filter songs">
+          <button type="button" class="filter-chip" data-lib-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="filter-chip" data-lib-filter="favorites" aria-pressed="false">Favorites</button>
+          <button type="button" class="filter-chip" data-lib-filter="learning" aria-pressed="false">Learning</button>
+          <button type="button" class="filter-chip" data-lib-filter="synced" aria-pressed="false">Synced</button>
         </div>
 
         <div class="library__empty" id="library-empty" hidden>
           <p>No songs saved yet.</p>
           <p>Tap the + button to search and add one.</p>
         </div>
+        <div class="library__empty" id="library-nomatch" hidden>
+          <p id="library-nomatch-text">No songs match.</p>
+          <button type="button" class="songsheet__btn" id="library-nomatch-search">Search online</button>
+        </div>
 
         <ul class="song-list" id="library-list"></ul>
       </div>
+    </section>
 
-      <!-- Search overlay -->
-      <div class="overlay" id="search-overlay" hidden>
-        <div class="overlay__header">
-          <button id="search-back" class="overlay__back" type="button" aria-label="Back">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <input id="search-input" class="overlay__search-input" type="search" placeholder="Title, artist or album…" autocomplete="off">
+    <!-- SETLISTS -->
+    <section class="page" id="page-setlists" data-page="setlists" hidden>
+      <div class="page-head">
+        <div class="page-head__text">
+          <h1 class="page-title">Setlists</h1>
+          <p class="page-sub" id="setlists-count"></p>
         </div>
-        <p class="search-status" id="search-status"></p>
-
-        <div class="custom-song">
-          <button id="custom-song-toggle" class="custom-song__toggle" type="button">
-            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17.2V20z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-            <span>Add a song that isn't listed</span>
-          </button>
-          <form id="custom-song-form" class="custom-song__form" hidden>
-            <input id="custom-song-title" class="custom-song__input" type="text" placeholder="Song title" autocomplete="off" maxlength="120" required>
-            <input id="custom-song-artist" class="custom-song__input" type="text" placeholder="Artist (optional)" autocomplete="off" maxlength="120">
-            <div class="custom-song__actions">
-              <button type="button" id="custom-song-cancel" class="custom-song__cancel">Cancel</button>
-              <button type="submit" class="custom-song__save">Add to Library</button>
-            </div>
-          </form>
-        </div>
-
-        <ul class="song-list" id="search-results"></ul>
+        <button id="setlists-new-btn" class="add-button" type="button" aria-label="New setlist">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
       </div>
 
-      <!-- Song detail overlay -->
-      <div class="overlay" id="detail-overlay" hidden>
-        <div class="overlay__header">
-          <button id="detail-back" class="overlay__back" type="button" aria-label="Back">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <div class="overlay__header-actions">
-            <button id="detail-favorite-btn" class="overlay__fav" type="button" aria-label="Toggle favorite" aria-pressed="false" hidden>
-              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3.8l2.55 5.4 5.7.66-4.24 4.03 1.13 5.86L12 16.9l-5.14 2.85 1.13-5.86-4.24-4.03 5.7-.66Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-            </button>
-          </div>
+      <form id="setlist-new-form" class="custom-song__form" hidden>
+        <input id="setlist-new-name" class="custom-song__input" type="text" placeholder="Setlist name" autocomplete="off" maxlength="60" required>
+        <div class="custom-song__actions">
+          <button type="button" id="setlist-new-cancel" class="custom-song__cancel">Cancel</button>
+          <button type="submit" class="custom-song__save">Create</button>
         </div>
-        <div class="song-detail" id="song-detail">
-          <img class="song-detail__art" id="detail-art" alt="">
-          <h2 class="song-detail__title" id="detail-title"></h2>
-          <p class="song-detail__artist" id="detail-artist"></p>
-          <p class="song-detail__meta" id="detail-meta"></p>
-          <div class="song-detail__save-row">
-            <button id="detail-save-btn" class="save-button" type="button">Save to Library</button>
-            <button id="detail-metronome-btn" class="detail-metro-btn" type="button" hidden>
-              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 8V5m-3 0h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 9 l4 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-              <span><b id="detail-bpm-value">120</b> BPM</span>
-            </button>
-          </div>
+      </form>
 
-          <!-- Full lyrics with the chords placed above the words. Collapsed by
-               default; sits above the external Chords/Tabs links. Populated by
-               js/songsheet.js from a sheet the user pastes in -- the text is
-               kept in its own localStorage store, never synced or exported. -->
-          <div class="songsheet" id="songsheet" hidden></div>
-
-
-          <div class="song-links" id="song-links">
-            <div class="song-links__group">
-              <h3 class="song-links__heading">Chords</h3>
-              <div class="song-links__buttons" id="detail-chord-links"></div>
-            </div>
-            <div class="song-links__group" id="tab-links-group">
-              <h3 class="song-links__heading">Tabs</h3>
-              <div class="song-links__buttons" id="detail-tab-links"></div>
-            </div>
-          </div>
-        </div>
+      <div class="library__empty" id="setlists-empty" hidden>
+        <p>No setlists yet.</p>
+        <p>Tap the + button to make one.</p>
       </div>
 
-      <!-- Setlists overview: every saved setlist, plus "new setlist" --
-           js/setlists.js. -->
-      <div class="overlay" id="setlists-overlay" hidden>
-        <div class="overlay__header">
-          <button id="setlists-back" class="overlay__back" type="button" aria-label="Back">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <h1 class="overlay__title">Setlists</h1>
-          <button id="setlists-new-btn" class="add-button" type="button" aria-label="New setlist">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-
-        <form id="setlist-new-form" class="custom-song__form" hidden>
-          <input id="setlist-new-name" class="custom-song__input" type="text" placeholder="Setlist name" autocomplete="off" maxlength="60" required>
-          <div class="custom-song__actions">
-            <button type="button" id="setlist-new-cancel" class="custom-song__cancel">Cancel</button>
-            <button type="submit" class="custom-song__save">Create</button>
-          </div>
-        </form>
-
-        <div class="library__empty" id="setlists-empty" hidden>
-          <p>No setlists yet.</p>
-          <p>Tap the + button to make one.</p>
-        </div>
-
-        <ul class="song-list" id="setlists-list"></ul>
-      </div>
-
-      <!-- One setlist's own songs -- js/setlists.js. Mirrors the plain
-           library page (same song cards) but scoped to this setlist's own
-           order, with "Play setlist" and an "Organize" drag-reorder mode. -->
-      <div class="overlay" id="setlist-detail-overlay" hidden>
-        <div class="overlay__header">
-          <button id="setlist-detail-back" class="overlay__back" type="button" aria-label="Back">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <h1 class="overlay__title" id="setlist-detail-title">Setlist</h1>
-          <div class="overlay__header-actions">
-            <button id="setlist-detail-delete-btn" class="overlay__fav" type="button" aria-label="Delete setlist">
-              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M5 7h14M9 7V5.2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7m-8 0 .7 12.2a1 1 0 0 0 1 .8h6.6a1 1 0 0 0 1-.8L17 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-            </button>
-            <button id="setlist-add-songs-btn" class="add-button" type="button" aria-label="Add songs">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </button>
-          </div>
-        </div>
-
-        <div class="setlist-detail__actions">
-          <button id="setlist-play-btn" class="songsheet__btn songsheet__btn--lg" type="button">Play setlist</button>
-          <button id="setlist-organize-btn" class="songsheet__btn songsheet__btn--sm" type="button">Organize</button>
-        </div>
-        <p class="setlist-detail__confirm" id="setlist-delete-confirm" hidden>
-          Delete this setlist? The songs themselves stay in your library.
-          <span class="setlist-detail__confirm-actions">
-            <button type="button" id="setlist-delete-yes" class="songsheet__btn songsheet__btn--sm songsheet__btn--danger">Delete</button>
-            <button type="button" id="setlist-delete-no" class="songsheet__btn songsheet__btn--sm">Cancel</button>
-          </span>
-        </p>
-
-        <div class="library__empty" id="setlist-detail-empty" hidden>
-          <p>No songs in this setlist yet.</p>
-          <p>Tap the + button to add some from your library.</p>
-        </div>
-
-        <ul class="song-list" id="setlist-detail-list"></ul>
-      </div>
-
-      <!-- Add existing library songs to a setlist -- js/setlists.js. New
-           songs come via the normal search overlay instead of a second
-           search UI here. -->
-      <div class="overlay" id="setlist-add-overlay" hidden>
-        <div class="overlay__header">
-          <button id="setlist-add-back" class="overlay__back" type="button" aria-label="Back">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <input id="setlist-add-filter" class="overlay__search-input" type="search" placeholder="Filter your library…" autocomplete="off">
-        </div>
-
-        <div class="library__empty" id="setlist-add-empty" hidden>
-          <p>Your library is empty.</p>
-          <p>Search for a new song to add it here.</p>
-        </div>
-
-        <ul class="song-list" id="setlist-add-list"></ul>
-      </div>
+      <ul class="setlist-cards" id="setlists-list"></ul>
     </section>
 
     <!-- CHORD BOOK -->
     <section class="page" id="page-chords" data-page="chords" hidden>
       <div class="chords">
-        <div class="chords__head">
-          <button class="instrument-switch" type="button" role="switch" aria-checked="false" aria-label="Switch between guitar and piano">
-            <span class="instrument-switch__icon instrument-switch__icon--guitar" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="15" height="15">
-                <path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                <path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                <line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-            </span>
-            <span class="instrument-switch__icon instrument-switch__icon--piano" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="15" height="15">
-                <rect x="3" y="5" width="18" height="14" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M8 5v9M12 5v9M16 5v9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </span>
-            <span class="instrument-switch__thumb" aria-hidden="true"></span>
-          </button>
-        </div>
-
         <div class="chord-roots" id="chord-roots" role="tablist" aria-label="Root note"></div>
         <div class="chord-types" id="chord-types" role="tablist" aria-label="Chord type"></div>
 
@@ -355,121 +217,126 @@
       </div>
     </section>
 
+    <!-- JAM: host or join. js/jam.js drives these ids; the same section shows
+         the "you're hosting" state once a jam is running. -->
+    <section class="page" id="page-jam" data-page="jam" hidden>
+      <div class="page-head">
+        <div class="page-head__text">
+          <h1 class="page-title">Jam</h1>
+          <p class="page-sub">Play along with friends in the room.</p>
+        </div>
+      </div>
+
+      <div class="jam-card" id="jam-host-group">
+        <div>
+          <h2 class="jam-card__title">Host a jam</h2>
+          <p class="jam-card__desc">Friends in the room follow your lyrics and chords live.</p>
+        </div>
+
+        <div id="jam-host-idle">
+          <button id="jam-start-btn" class="mic-button" type="button">Start a jam</button>
+          <p class="settings-note" id="jam-host-status"></p>
+        </div>
+
+        <div id="jam-hosting" hidden>
+          <div class="jam-code" id="jam-host-code" aria-label="Jam code"></div>
+          <p class="settings-note"><span id="jam-host-count">0</span> following. Open any song and it is shared automatically.</p>
+          <div class="stack-actions">
+            <button id="jam-host-share-btn" class="mic-button" type="button">Share link</button>
+            <button id="jam-host-stop-btn" class="songsheet__btn songsheet__btn--danger" type="button">Stop jam</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="jam-card" id="jam-join-group">
+        <div>
+          <h2 class="jam-card__title">Join a jam</h2>
+          <p class="jam-card__desc">Enter the 4-letter code from the host.</p>
+        </div>
+
+        <div id="jam-join-idle">
+          <div class="stack-fields">
+            <input id="jam-join-code" class="custom-song__input jam-codeinput" type="text" placeholder="CODE" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="4" aria-label="Jam code">
+            <button id="jam-join-btn" class="songsheet__btn songsheet__btn--lg" type="button">Join</button>
+          </div>
+          <p class="settings-note" id="jam-join-status"></p>
+        </div>
+
+        <div id="jam-following" hidden>
+          <p class="settings-note">Following jam <b id="jam-follow-code"></b></p>
+          <button id="jam-leave-btn" class="songsheet__btn" type="button">Leave jam</button>
+        </div>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="page" id="page-settings" data-page="settings" hidden>
-      <div class="page-head">
-        <button id="settings-back" class="overlay__back" type="button" aria-label="Back">
+      <div class="page-head page-head--back">
+        <button id="settings-back" class="icon-btn" type="button" aria-label="Back">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <h1 class="page-title">Settings</h1>
       </div>
+
       <div class="settings-list">
-        <!-- Samen jammen: share your lyrics/chords scroll live with friends
-             in the room, or follow someone else's. Split into a host card
-             and a join card (rather than one card doing both) so the two
-             very different actions don't compete for the same buttons. See
-             js/jam.js. -->
-        <div class="settings-row settings-row--stack" id="jam-host-group">
-          <div>
-            <div class="settings-row__title">Host a jam</div>
-            <div class="settings-row__desc">Share your lyrics &amp; chords scroll live with friends in the room.</div>
-          </div>
-
-          <div id="jam-host-idle">
-            <div class="stack-actions">
-              <button id="jam-start-btn" class="custom-song__save" type="button">Start a jam</button>
-            </div>
-            <p class="settings-note" id="jam-host-status"></p>
-          </div>
-
-          <div id="jam-hosting" hidden>
-            <p class="settings-note">Jam code: <b id="jam-host-code"></b> · <span id="jam-host-count">0</span> following</p>
-            <div class="stack-actions">
-              <button id="jam-host-share-btn" class="custom-song__save" type="button">Share link</button>
-              <button id="jam-host-stop-btn" class="custom-song__cancel" type="button">Stop jam</button>
+        <h2 class="settings-label">Appearance</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <div class="settings-row__title">Instrument</div>
+            <div class="seg seg--inline" role="group" aria-label="Instrument">
+              <button type="button" class="seg__btn" data-set-instrument="guitar">Guitar</button>
+              <button type="button" class="seg__btn" data-set-instrument="piano">Piano</button>
             </div>
           </div>
-        </div>
-
-        <div class="settings-row settings-row--stack" id="jam-join-group">
-          <div>
-            <div class="settings-row__title">Join a jam</div>
-            <div class="settings-row__desc">Follow someone else's lyrics &amp; chords, live.</div>
-          </div>
-
-          <div id="jam-join-idle">
-            <div class="stack-fields">
-              <input id="jam-join-code" class="custom-song__input" type="text" placeholder="4-letter code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="4">
-              <button id="jam-join-btn" class="custom-song__save" type="button">Join</button>
-            </div>
-            <p class="settings-note" id="jam-join-status"></p>
-          </div>
-
-          <div id="jam-following" hidden>
-            <p class="settings-note">Following jam <b id="jam-follow-code"></b></p>
-            <button id="jam-leave-btn" class="custom-song__cancel" type="button">Leave jam</button>
-          </div>
-        </div>
-
-        <div class="settings-row">
-          <div>
+          <div class="settings-row">
             <div class="settings-row__title">Theme</div>
-            <div class="settings-row__desc">Campfire in daylight or by the embers.</div>
+            <div class="seg seg--inline" role="group" aria-label="Theme">
+              <button type="button" class="seg__btn" data-set-theme="light">Light</button>
+              <button type="button" class="seg__btn" data-set-theme="dark">Dark</button>
+            </div>
           </div>
-          <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">
-            <span class="theme-toggle__thumb"></span>
-          </button>
-        </div>
-        <div class="settings-row">
-          <div>
-            <div class="settings-row__title">Default tuning</div>
-            <div class="settings-row__desc">Used when the tuner opens.</div>
-          </div>
-          <select id="default-tuning-select">
-            <option value="standard" selected>Standard</option>
-            <option value="dropD">Drop D</option>
-            <option value="openG">Open G</option>
-            <option value="openD">Open D</option>
-            <option value="halfStepDown">Half Step Down</option>
-          </select>
         </div>
 
         <!-- Account & cloud sync (only shown when a sync server is configured
              in js/sync.js) -->
-        <div class="settings-row settings-row--stack" id="account-group" hidden>
-          <div>
-            <div class="settings-row__title">Account &amp; sync</div>
-            <div class="settings-row__desc">Keep your library backed up in the cloud. No email — just a username and a 6-digit passcode.</div>
-          </div>
-
-          <div id="account-signed-out">
-            <div class="stack-fields">
-              <input id="account-username" class="custom-song__input" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="20">
-              <input id="account-passcode" class="custom-song__input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit passcode" autocomplete="off" maxlength="6">
+        <div id="account-group" hidden>
+          <h2 class="settings-label">Account</h2>
+          <div class="settings-group settings-group--pad">
+            <div>
+              <div class="settings-row__title">Sync your library</div>
+              <div class="settings-row__desc">Keep your library backed up in the cloud. No email, just a username and a 6-digit passcode.</div>
             </div>
-            <div class="stack-actions">
-              <button id="account-login-btn" class="custom-song__save" type="button">Sign in</button>
-              <button id="account-register-btn" class="custom-song__cancel" type="button">Create account</button>
-            </div>
-            <p class="settings-note" id="account-status"></p>
-          </div>
 
-          <div id="account-signed-in" hidden>
-            <p class="settings-note">Signed in as <b id="account-who"></b></p>
-            <p class="settings-note" id="account-sync-status"></p>
-            <button id="account-logout-btn" class="custom-song__cancel" type="button">Sign out</button>
+            <div id="account-signed-out">
+              <div class="stack-fields">
+                <input id="account-username" class="custom-song__input" type="text" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="20">
+                <input id="account-passcode" class="custom-song__input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit passcode" autocomplete="off" maxlength="6">
+              </div>
+              <div class="stack-actions">
+                <button id="account-login-btn" class="custom-song__save" type="button">Sign in</button>
+                <button id="account-register-btn" class="custom-song__cancel" type="button">Create account</button>
+              </div>
+              <p class="settings-note" id="account-status"></p>
+            </div>
+
+            <div id="account-signed-in" hidden>
+              <p class="settings-note">Signed in as <b id="account-who"></b></p>
+              <p class="settings-note" id="account-sync-status"></p>
+              <button id="account-logout-btn" class="songsheet__btn" type="button">Sign out</button>
+            </div>
           </div>
         </div>
 
         <!-- Manual backup: always available, independent of the cloud sync -->
-        <div class="settings-row settings-row--stack">
+        <h2 class="settings-label">Data</h2>
+        <div class="settings-group settings-group--pad">
           <div>
             <div class="settings-row__title">Back-up file</div>
-            <div class="settings-row__desc">Save everything to a file — library, setlists, settings and the chord sheets — or merge one back in. Importing never deletes what you already have.</div>
+            <div class="settings-row__desc">Save everything to a file (library, setlists, settings and the chord sheets), or merge one back in. Importing never deletes what you already have.</div>
           </div>
           <div class="stack-actions">
             <button id="export-btn" class="custom-song__save" type="button">Export</button>
-            <button id="import-btn" class="custom-song__cancel" type="button">Import</button>
+            <button id="import-btn" class="songsheet__btn" type="button">Import</button>
             <input id="import-file" type="file" accept="application/json,.json" hidden>
           </div>
           <p class="settings-note" id="backup-status"></p>
@@ -480,23 +347,174 @@
 
   </main>
 
+  <!-- Search overlay (add a song) -->
+  <div class="overlay" id="search-overlay" hidden>
+    <div class="overlay__header">
+      <button id="search-back" class="icon-btn" type="button" aria-label="Back">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <input id="search-input" class="overlay__search-input" type="search" placeholder="Title, artist or album…" autocomplete="off">
+    </div>
+    <p class="search-status" id="search-status"></p>
+
+    <div class="custom-song">
+      <button id="custom-song-toggle" class="custom-song__toggle" type="button">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17.2V20z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        <span>Add a song that isn't listed</span>
+      </button>
+      <form id="custom-song-form" class="custom-song__form" hidden>
+        <input id="custom-song-title" class="custom-song__input" type="text" placeholder="Song title" autocomplete="off" maxlength="120" required>
+        <input id="custom-song-artist" class="custom-song__input" type="text" placeholder="Artist (optional)" autocomplete="off" maxlength="120">
+        <div class="custom-song__actions">
+          <button type="button" id="custom-song-cancel" class="custom-song__cancel">Cancel</button>
+          <button type="submit" class="custom-song__save">Add to Library</button>
+        </div>
+      </form>
+    </div>
+
+    <ul class="song-list" id="search-results"></ul>
+  </div>
+
+  <!-- Song screen: full screen, no tab bar. Top bar, a strip with the song's
+       chords, the scrolling lyrics, and one transport bar at the bottom
+       (autoscroll, audio, display). js/library.js owns the shell,
+       js/songsheet.js fills the lyrics, chord strip and transport. -->
+  <div class="overlay overlay--song" id="detail-overlay" hidden>
+    <header class="detail-top">
+      <button id="detail-back" class="icon-btn" type="button" aria-label="Back">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <img class="detail-top__art" id="detail-art" alt="">
+      <div class="detail-top__text">
+        <h2 class="song-detail__title" id="detail-title"></h2>
+        <p class="song-detail__artist" id="detail-artist"></p>
+      </div>
+      <button id="detail-favorite-btn" class="icon-btn overlay__fav" type="button" aria-label="Toggle favorite" aria-pressed="false" hidden>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3.8l2.55 5.4 5.7.66-4.24 4.03 1.13 5.86L12 16.9l-5.14 2.85 1.13-5.86-4.24-4.03 5.7-.66Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="detail-more-btn" class="icon-btn" type="button" aria-label="More">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>
+      </button>
+    </header>
+
+    <!-- Small row under the title: the jam banner, the setlist's prev/next,
+         and "Add to library" while the song isn't saved yet. -->
+    <div class="detail-sub" id="detail-sub">
+      <button id="detail-save-btn" class="songsheet__btn songsheet__btn--primary songsheet__btn--sm" type="button">Add to library</button>
+    </div>
+
+    <div class="detail-chordstrip" id="detail-chordstrip" hidden></div>
+    <div class="detail-chordcard" id="detail-chordcard" hidden></div>
+
+    <div class="detail-scroll" id="detail-scroll">
+      <div class="song-detail" id="song-detail">
+        <p class="song-detail__meta" id="detail-meta"></p>
+        <!-- Kept for js/library.js; reached through the song's ... menu. -->
+        <button id="detail-metronome-btn" type="button" hidden><b id="detail-bpm-value">120</b></button>
+
+        <!-- Lyrics with the chords placed above the words. Populated by
+             js/songsheet.js from a sheet the user fetches or pastes in -- the
+             text is kept in its own localStorage store, never synced. -->
+        <div class="songsheet" id="songsheet" hidden></div>
+
+        <!-- Only shown while there is no sheet yet. -->
+        <div class="song-links" id="song-links">
+          <div class="song-links__group">
+            <h3 class="song-links__heading">Find a sheet</h3>
+            <div class="song-links__buttons" id="detail-chord-links"></div>
+          </div>
+          <div class="song-links__group" id="tab-links-group">
+            <h3 class="song-links__heading">Tabs</h3>
+            <div class="song-links__buttons" id="detail-tab-links"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Autoscroll + audio + display. js/songsheet.js fills it; js/audiodock.js
+         puts the audio sources and the now-playing bar inside. -->
+    <div class="song-transport" id="song-transport" hidden></div>
+  </div>
+
+  <!-- One setlist's own songs -- js/setlists.js. -->
+  <div class="overlay" id="setlist-detail-overlay" hidden>
+    <div class="overlay__header">
+      <button id="setlist-detail-back" class="icon-btn" type="button" aria-label="Back">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 class="overlay__title" id="setlist-detail-title">Setlist</h1>
+      <button id="setlist-detail-menu-btn" class="icon-btn" type="button" aria-label="More">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>
+      </button>
+    </div>
+
+    <form id="setlist-rename-form" class="custom-song__form" hidden>
+      <input id="setlist-rename-name" class="custom-song__input" type="text" placeholder="Setlist name" autocomplete="off" maxlength="60" required>
+      <div class="custom-song__actions">
+        <button type="button" id="setlist-rename-cancel" class="custom-song__cancel">Cancel</button>
+        <button type="submit" class="custom-song__save">Rename</button>
+      </div>
+    </form>
+
+    <div class="setlist-detail__actions">
+      <button id="setlist-play-btn" class="mic-button" type="button">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z" fill="currentColor"/></svg>
+        <span>Play setlist</span>
+      </button>
+      <button id="setlist-add-songs-btn" class="songsheet__btn" type="button">+ Add songs</button>
+      <button id="setlist-organize-btn" class="songsheet__btn songsheet__btn--primary" type="button" hidden>Done</button>
+    </div>
+    <p class="setlist-detail__confirm" id="setlist-delete-confirm" hidden>
+      Delete this setlist? The songs themselves stay in your library.
+      <span class="setlist-detail__confirm-actions">
+        <button type="button" id="setlist-delete-yes" class="songsheet__btn songsheet__btn--sm songsheet__btn--danger">Delete</button>
+        <button type="button" id="setlist-delete-no" class="songsheet__btn songsheet__btn--sm">Cancel</button>
+      </span>
+    </p>
+
+    <div class="library__empty" id="setlist-detail-empty" hidden>
+      <p>No songs in this setlist yet.</p>
+      <p>Tap “Add songs” to pick some from your library.</p>
+    </div>
+
+    <ul class="song-list" id="setlist-detail-list"></ul>
+  </div>
+
+  <!-- Add existing library songs to a setlist -- js/setlists.js. New
+       songs come via the normal search overlay instead of a second
+       search UI here. -->
+  <div class="overlay" id="setlist-add-overlay" hidden>
+    <div class="overlay__header">
+      <button id="setlist-add-back" class="icon-btn" type="button" aria-label="Back">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <input id="setlist-add-filter" class="overlay__search-input" type="search" placeholder="Filter your library…" autocomplete="off">
+    </div>
+
+    <div class="library__empty" id="setlist-add-empty" hidden>
+      <p>Your library is empty.</p>
+      <p>Search for a new song to add it here.</p>
+    </div>
+
+    <ul class="song-list" id="setlist-add-list"></ul>
+  </div>
+
   <nav class="bottom-nav" aria-label="Main">
-    <button class="nav-btn nav-btn--tuner" data-target="tuner" type="button">
-      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 3.5h6l-1.6 7h-2.8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.2h1.9M8 9.3h2.3M16 6.2h-1.9M16 9.3h-2.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="10.5" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      <span>Tuner</span>
-    </button>
-    <button class="nav-btn" data-target="metronome" type="button">
-      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M9 21h6l-2-15h-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 8V5m-3 0h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 9 l4 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      <span>Metronome</span>
-    </button>
     <button class="nav-btn is-active" data-target="library" type="button">
-      <svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 4.5c2 -0.8 4.3 -0.8 6.5 0v15c-2.2 -0.8 -4.5 -0.8 -6.5 0Z M18.5 4.5c-2 -0.8 -4.3 -0.8 -6.5 0v15c2.2 -0.8 4.5 -0.8 6.5 0Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
-      <span>Library</span>
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16.5" cy="16" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <span>Songs</span>
     </button>
-    <button class="nav-btn" data-target="chords" type="button">
-      <svg class="nav-chords-ic nav-chords-ic--guitar" viewBox="0 0 24 24" width="21" height="21"><g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="9.5" y1="4" x2="9.5" y2="20"/><line x1="14.5" y1="4" x2="14.5" y2="20"/></g><g fill="currentColor" stroke="none"><circle cx="7" cy="12.5" r="1.5"/><circle cx="12" cy="7.2" r="1.5"/><circle cx="17" cy="17.5" r="1.5"/></g></svg>
-      <svg class="nav-chords-ic nav-chords-ic--piano" viewBox="0 0 24 24" width="21" height="21"><rect x="3" y="5" width="18" height="14" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 5v8.5M12 5v8.5M16.5 5v8.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><g fill="currentColor" stroke="none"><rect x="6.1" y="5" width="2.8" height="6" rx="0.6"/><rect x="10.6" y="5" width="2.8" height="6" rx="0.6"/><rect x="15.1" y="5" width="2.8" height="6" rx="0.6"/></g></svg>
-      <span>Chords</span>
+    <button class="nav-btn" data-target="setlists" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6h13M4 12h13M4 18h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="20" cy="6" r="1.6" fill="currentColor"/><circle cx="20" cy="12" r="1.6" fill="currentColor"/></svg>
+      <span>Setlists</span>
+    </button>
+    <button class="nav-btn" data-target="tools" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <span>Tools</span>
+    </button>
+    <button class="nav-btn" data-target="jam" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="9" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.5 19c.5-3 2.7-4.6 5.5-4.6s5 1.6 5.5 4.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M16 5.5a2.7 2.7 0 0 1 0 5M18 14.6c1.7.5 2.8 1.8 3.200 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>Jam</span>
     </button>
   </nav>
 
@@ -504,6 +522,7 @@
 
 <script src="js/tuner.js"></script>
 <script src="js/metronome-engine.js"></script>
+<script src="js/ui.js"></script>
 <script src="js/app.js"></script>
 <script src="js/metronome.js"></script>
 <script src="js/library.js"></script>
