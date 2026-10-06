@@ -306,8 +306,40 @@
     return line.split(/\s+/).length >= 10 && /[.!?:]$/.test(line);
   }
 
+  // Some UG sheets were typed on a Mac with the wrong encoding, so "é" is
+  // stored as "√©" (UTF-8 bytes read as MacRoman). Besides looking broken,
+  // the "©" in there tripped the copyright filter and deleted whole lyric
+  // lines. Turns such runs back into the real characters.
+  let macRomanBytes = null;
+  function fixMacRomanMojibake(text) {
+    if (text.indexOf("√") === -1 || typeof TextDecoder === "undefined") return text;
+    try {
+      if (!macRomanBytes) {
+        const dec = new TextDecoder("macintosh");
+        macRomanBytes = new Map();
+        for (let b = 0x80; b <= 0xff; b++) macRomanBytes.set(dec.decode(new Uint8Array([b])), b);
+      }
+      const utf8 = new TextDecoder("utf-8", { fatal: true });
+      return text.replace(/[^\x00-\x7f]+/g, (run) => {
+        const bytes = [];
+        for (const ch of run) {
+          const b = macRomanBytes.get(ch);
+          if (b == null) return run;
+          bytes.push(b);
+        }
+        try {
+          return utf8.decode(new Uint8Array(bytes));
+        } catch (e) {
+          return run;
+        }
+      });
+    } catch (e) {
+      return text;
+    }
+  }
+
   function cleanSheetText(raw) {
-    const text = String(raw || "").replace(/\r\n?/g, "\n");
+    const text = fixMacRomanMojibake(String(raw || "").replace(/\r\n?/g, "\n"));
     let capo = null;
     const hasCapoDirective = /^\s*\{\s*capo\b/im.test(text);
     let lines = [];
