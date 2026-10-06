@@ -1707,7 +1707,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 .jam-view__follow-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.8rem; }
 
 /* Small on/off switch for showing the chords at all -- off leaves just the
-   lyrics (see js/jam.js renderLyricOnlyLine()). */
+   lyrics (the chords stay in the layout, just invisible). */
 .jam-view__chord-switch {
   display: inline-flex;
   align-items: center;
@@ -1743,8 +1743,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 }
 .jam-view__chord-switch[aria-checked="true"] .jam-view__chord-switch-track { background: var(--amber-deep); }
 .jam-view__chord-switch[aria-checked="true"] .jam-view__chord-switch-thumb { transform: translateX(16px); }
-.ss-line--lyriconly .ss-seg { white-space: normal; }
-.ss-line--lyriconly-empty { min-height: 0.5rem; }
 
 /* Bottom-right FAB, same size/shape as the host's own .songsheet__fab-btn --
    but this one only ever toggles whether THIS follower's screen keeps

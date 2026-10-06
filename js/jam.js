@@ -491,6 +491,9 @@
 
   function updateChordSwitchUI() {
     if (!followerEls) return;
+    // Chords off hides them (visibility, not removal) so the lyrics keep the
+    // exact spacing they have with chords on -- same as the host's own switch.
+    followerEls.body.classList.toggle("songsheet--nochords", followerHideChords);
     followerEls.chordSwitch.setAttribute("aria-checked", followerHideChords ? "false" : "true");
   }
 
@@ -597,23 +600,6 @@
     followerEls.chipsWrap.appendChild(card);
   }
 
-  // Same ss-line wrapper as renderLine() (so line marks, scroll mapping and
-  // styling keep working) but with the lyric as one wrapping piece and no
-  // chords. A chord-only line (intro / instrumental bars) collapses to a
-  // thin spacer instead of an empty row.
-  function renderLyricOnlyLine(line) {
-    const wrap = el("div", "ss-line ss-line--lyriconly");
-    const lyric = (line.lyric || "").trim();
-    if (!lyric) {
-      wrap.classList.add("ss-line--lyriconly-empty");
-      return wrap;
-    }
-    const seg = el("span", "ss-seg");
-    seg.appendChild(el("span", "ss-seg__lyric", lyric));
-    wrap.appendChild(seg);
-    return wrap;
-  }
-
   function renderFollowerBody(SS, shown) {
     followerEls.body.textContent = "";
     let flatLineIdx = 0;
@@ -626,7 +612,7 @@
           return;
         }
         const idx = flatLineIdx++;
-        const lineEl = followerHideChords ? renderLyricOnlyLine(line) : SS.renderLine(line, false, idx, null, followerInstrument);
+        const lineEl = SS.renderLine(line, false, idx, null, followerInstrument);
         lineEl.dataset.lineIdx = String(idx);
         sec.appendChild(lineEl);
       });
