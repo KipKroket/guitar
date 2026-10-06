@@ -300,6 +300,15 @@
     }
   }
 
+  function toggleLearning(id) {
+    const entry = findEntry(id);
+    if (!entry) return;
+    entry.learning = !entry.learning;
+    entry.updatedAt = Date.now();
+    commit();
+    renderLibraryList();
+  }
+
   // Used by js/spotify.js and js/backingtrack.js to remember a resolved
   // Spotify track id / a pasted backing-track link on the song itself, the
   // same way favorite/learning are stored -- so it rides along with
@@ -891,6 +900,7 @@
     sync: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     mic: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 19v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
     globe: '<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 12h16M12 4c2.5 2.2 2.5 13.800 0 16M12 4c-2.5 2.2-2.5 13.800 0 16" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    learn: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 9.5 12 5l9 4.5-9 4.5-9-4.5Z M7 12v4.2c1.4 1.2 3.2 1.8 5 1.8s3.6-.6 5-1.8V12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
     trash: '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 7h14M9 7V5.2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7m-8 0 .7 12.2a1 1 0 0 0 1 .8h6.600a1 1 0 0 0 1-.8L17 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   };
 
@@ -907,6 +917,12 @@
         icon: ICONS.edit,
         hidden: !a || a.hasSheet,
         onClick: () => a.edit(),
+      },
+      {
+        label: saved && findEntry(currentDetailId).learning ? "Mark as learned" : "Mark as learning",
+        icon: ICONS.learn,
+        hidden: !saved,
+        onClick: () => toggleLearning(currentDetailId),
       },
       {
         label: "Add to setlist",

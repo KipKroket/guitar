@@ -761,7 +761,7 @@
      (starts the LRCLIB lookup), and then either follow the recording -- the
      line that is about to be sung is highlighted and eased into view -- or,
      as the fallback, scroll at the fixed tempo while that is switched on. ---- */
-  let nowEl = null;
+  let nowEls = [];
   let userScrollUntil = 0; // after the user scrolls by hand, leave the view alone for a moment
   let lastNowIdx = -2;
   let settling = false;
@@ -769,15 +769,32 @@
   let transportSig = "";
   let scrollListening = false;
 
-  function applyNowHighlight(idx) {
-    const target = idx >= 0 && panel ? lineElAt(idx) : null;
-    if (target === nowEl && (!target || target.classList.contains("ss-line--now"))) return;
-    if (nowEl) nowEl.classList.remove("ss-line--now");
-    nowEl = target;
-    if (target) {
-      void target.offsetWidth; // restart the little flash
-      target.classList.add("ss-line--now");
+  // Lights the current line plus any lines after it that have no timing of
+  // their own (up to the next timed line, or the end of the section): a
+  // lyric written as two short lines that LRCLIB times as one sentence is
+  // sung in one go, so both light up together. `endIdx` is the first line
+  // that must NOT light up (the next anchor's line), or -1 for "no limit".
+  function applyNowHighlight(idx, endIdx) {
+    const targets = [];
+    const first = idx >= 0 && panel ? lineElAt(idx) : null;
+    if (first) {
+      targets.push(first);
+      for (let i = idx + 1; endIdx < 0 || i < endIdx; i++) {
+        const el = lineElAt(i);
+        if (!el || el.parentElement !== first.parentElement) break;
+        targets.push(el);
+      }
     }
+    if (
+      targets.length === nowEls.length &&
+      targets.every((t, i) => t === nowEls[i] && t.classList.contains("ss-line--now"))
+    ) return;
+    nowEls.forEach((el) => el.classList.remove("ss-line--now"));
+    nowEls = targets;
+    targets.forEach((t) => {
+      void t.offsetWidth; // restart the little flash
+      t.classList.add("ss-line--now");
+    });
   }
 
   function markUserScroll() {
@@ -804,7 +821,11 @@
       const cur = AS.currentLine(T.anchors, active.ms - T.offsetMs + leadMs);
       const idx = cur.at < 0 ? -1 : cur.line;
       T.nowLine = idx;
-      applyNowHighlight(idx);
+      let endIdx = -1;
+      for (let k = cur.at + 1; cur.at >= 0 && k < T.anchors.length; k++) {
+        if (T.anchors[k].line > idx) { endIdx = T.anchors[k].line; break; }
+      }
+      applyNowHighlight(idx, endIdx);
       if (!wasFollowing) {
         scrollPos = null;
         scrollWritten = null;
@@ -1834,7 +1855,7 @@
     closeInlineChordPopover();
     state = null;
     panel = null;
-    nowEl = null;
+    nowEls = [];
     renderTiming();
     clearChordStrip();
     renderTransport();
@@ -1872,7 +1893,7 @@
     }
     root.textContent = "";
     panel = null;
-    nowEl = null; // the lines are rebuilt below; the loop re-applies the highlight
+    nowEls = []; // the lines are rebuilt below; the loop re-applies the highlight
     root.classList.toggle("songsheet--nochords", !showChordsPref());
 
     panel = el("div", "songsheet__panel");
