@@ -634,7 +634,7 @@
           return;
         }
         const idx = flatLineIdx++;
-        const lineEl = SS.renderLine(line, false, idx, null, followerInstrument);
+        const lineEl = SS.renderLine(line, idx, null);
         lineEl.dataset.lineIdx = String(idx);
         sec.appendChild(lineEl);
       });

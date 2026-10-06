@@ -1461,51 +1461,13 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   color: var(--ink);
 }
 
-/* Tappable inline chords -- opens the same small diagram as the chip row,
-   right next to the word (see .ss-chord-popover). */
-.ss-seg__chord--tap {
-  cursor: pointer;
-  border-radius: 3px;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: color-mix(in srgb, var(--amber-deep) 55%, transparent);
-  text-underline-offset: 2px;
-  -webkit-tap-highlight-color: transparent;
-}
-.ss-seg__chord--tap.is-active {
-  background: var(--amber);
-  color: var(--bg);
-  text-decoration: none;
-}
-
 /* Play along's "you're here" marker (js/songsheet.js renderLine, driven by
-   js/chorddetect.js) -- a distinct color from the tap-popover's amber
-   .is-active above since both can be true on different chords at once. */
+   js/chorddetect.js) -- the green "live step" chord. */
 .ss-seg__chord--playalong {
   background: var(--good);
   color: var(--bg);
   text-decoration: none;
   border-radius: 3px;
-}
-
-/* The floating chord diagram opened by tapping an inline chord -- a
-   body-level fixed node (like the FAB) positioned in JS next to the tapped
-   chord, so it isn't clipped by the overlay's own overflow-y:auto. Content
-   (name/diagram/notes) comes from the same GuitarChords.renderInto() used
-   by the chip row and the chord book, via the shared .mini-chord__* rules. */
-.ss-chord-popover {
-  position: fixed;
-  /* Above .jam-view (30) too -- js/jam.js reuses this same tapped-chord
-     popover for a jam follower's lyrics, which render inside that
-     full-screen overlay. */
-  z-index: 31;
-  width: 11rem;
-  padding: 0.85rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  text-align: center;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
 }
 
 /* ---------- Settings ---------- */

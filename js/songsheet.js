@@ -4,7 +4,7 @@
 // getActions() for the things you do now and then (edit, sync, play along).
 //
 // Phase 1 (this file): parse a pasted chord sheet, render it, transpose it,
-// tap a chord to see its diagram. No network at all -- the text is whatever
+// see chords in context. No network at all -- the text is whatever
 // the user pastes in. Phase 2 adds a "fetch automatically" button: a
 // title/artist search comes back as multiple candidates (one Worker request
 // per site tried, several sites) shown as a scrollable preview list -- the
@@ -834,7 +834,7 @@
         scrollPos = null;
         scrollWritten = null;
       }
-      if (now < userScrollUntil || inlineChordCard) {
+      if (now < userScrollUntil) {
         scrollPos = null;
         scrollWritten = null;
       } else if (active.playing || idx !== lastNowIdx || settling) {
@@ -858,7 +858,7 @@
       applyNowHighlight(-1);
       lastNowIdx = -2;
       settling = false;
-      if (state.autoscroll.on && !inlineChordCard) tickManual(box, ts);
+      if (state.autoscroll.on) tickManual(box, ts);
       else scrollLastTs = null;
     }
     wasFollowing = following;
@@ -987,6 +987,36 @@
       if (key && ms != null) return { key, ms, dur: B.getDuration(), playing: B.isPlaying() };
     }
     return null;
+  }
+
+  // Skips the recording to where line `idx` is sung -- the moment that line
+  // lights up (its anchor, shifted by the user's offset and the highlight's
+  // lead), so playing on from there starts just before it. Lines without a
+  // timestamp of their own belong to the closest anchor above them; lines
+  // before the first anchor (an intro) go to the start. Does nothing without
+  // a loaded recording that has timing. In a jam only the host's screen ever
+  // gets here (followers' lines have no handler), and followers pick the new
+  // position up through the usual snapshot.
+  function seekToLine(idx) {
+    const T = state && state.timing;
+    const active = getActivePlayback();
+    if (!active || !T || !timingReady()) return;
+    let ms = 0;
+    for (let k = T.anchors.length - 1; k >= 0; k--) {
+      if (T.anchors[k].line <= idx) {
+        ms = Math.max(0, T.anchors[k].ms + T.offsetMs - leadMs + 50);
+        break;
+      }
+    }
+    const src = window.GuitarAudioDock && window.GuitarAudioDock.isNowPlaying("spotify") ? window.GuitarSpotify : window.GuitarBackingTrack;
+    if (!src || !src.seekTo) return;
+    src.seekTo(ms);
+    // The tap's touchstart counted as "scrolling by hand" -- but this one
+    // should carry the view along straight away.
+    userScrollUntil = 0;
+    scrollPos = null;
+    scrollWritten = null;
+    settling = true;
   }
 
   // Whether a recording is loaded in the audio bar -- from the moment it is
@@ -1856,7 +1886,6 @@
     stopLoop();
     applyNowHighlight(-1);
     stopPlayAlong();
-    closeInlineChordPopover();
     state = null;
     panel = null;
     nowEls = [];
@@ -1888,7 +1917,6 @@
   }
 
   function render() {
-    closeInlineChordPopover();
     if (!state) {
       clearChordStrip();
       renderTransport();
@@ -2386,11 +2414,7 @@
           return;
         }
         const idx = flatLineIdx++;
-        // Play along repurposes a tap on the chord itself for its own line-
-        // jump (see the click handler added just below) -- if chord-tap for
-        // the diagram popover stayed on too, tapping near a chord to jump
-        // would show the diagram instead almost every time.
-        const lineEl = renderLine(line, state.calibrating || state.playAlong.on, idx, playAlongKeys);
+        const lineEl = renderLine(line, idx, playAlongKeys);
         lineEl.dataset.lineIdx = String(idx);
         if (state.playAlong.on) {
           lineEl.classList.add("ss-line--syncable");
@@ -2408,14 +2432,13 @@
           });
         }
         if (!state.calibrating && !state.playAlong.on) {
-          // Only the empty space right of the line's own content counts --
-          // e.target is the wrap itself there, never one of its .ss-seg
-          // children (chord taps already stopPropagation(), and a lyric
-          // click bubbling up would still be the ss-seg__lyric span, not
-          // lineEl) -- so this can't fire from tapping the actual text.
+          // A tap on the text skips the recording to that line (seekToLine,
+          // only while a recording with timing is loaded); the empty space
+          // right of the line's own content (e.target is the wrap itself
+          // there, never one of its .ss-seg children) still just marks it.
           lineEl.addEventListener("click", (e) => {
-            if (e.target !== lineEl) return;
-            markLine(idx);
+            if (e.target === lineEl) markLine(idx);
+            else seekToLine(idx);
           });
         }
         sec.appendChild(lineEl);
@@ -2436,111 +2459,14 @@
     }
   }
 
-  /* ---- Tap-a-chord preview ----------------------------------------------
-     Tapping a chord inline (above the lyric it goes with) shows the same
-     small diagram as the chip row, floating right next to the word --
-     dismissed by tapping anywhere else on the page. A body-level fixed node
-     (like the FAB), so it isn't clipped by the overlay's own
-     overflow-y:auto and can be positioned in plain viewport coordinates. ---- */
-  let inlineChordCard = null;
-  let inlineChordAnchor = null;
-  let inlineChordOutsideHandler = null;
-  let inlineChordScrollHandler = null;
-  // Autoscroll otherwise carries the popover straight off past the chord it
-  // belongs to within a frame or two (via the scroll-close handler below) --
-  // freeze it for as long as the popover is open instead, and pick back up
-  // from wherever it's left when the popover closes.
-
-  function closeInlineChordPopover() {
-    if (inlineChordAnchor) inlineChordAnchor.classList.remove("is-active");
-    inlineChordAnchor = null;
-    if (inlineChordCard) {
-      inlineChordCard.remove();
-      inlineChordCard = null;
-    }
-    if (inlineChordOutsideHandler) {
-      document.removeEventListener("pointerdown", inlineChordOutsideHandler, true);
-      inlineChordOutsideHandler = null;
-    }
-    if (inlineChordScrollHandler) {
-      const box = scrollContainer();
-      if (box) box.removeEventListener("scroll", inlineChordScrollHandler);
-      inlineChordScrollHandler = null;
-    }
-  }
-
-  function toggleInlineChordPopover(anchorEl, sym, instrumentOverride) {
-    if (inlineChordAnchor === anchorEl) {
-      closeInlineChordPopover();
-      return;
-    }
-    closeInlineChordPopover();
-
-    scrollLastTs = null; // the loop leaves the view alone while the popover is open
-
-    const card = el("div", "ss-chord-popover");
-    document.body.appendChild(card);
-    const ok = window.GuitarChords && window.GuitarChords.renderInto
-      ? window.GuitarChords.renderInto(card, sym, instrumentOverride)
-      : false;
-    if (!ok && !card.textContent) card.textContent = "No diagram for " + sym + ".";
-
-    // Prefer just below the chord; flip above if that would run off the
-    // bottom, and clamp horizontally so it never runs off either side.
-    const anchorRect = anchorEl.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    const margin = 8;
-    let left = Math.min(anchorRect.left, window.innerWidth - cardRect.width - margin);
-    left = Math.max(margin, left);
-    let top = anchorRect.bottom + 6;
-    if (top + cardRect.height > window.innerHeight - margin) {
-      top = anchorRect.top - cardRect.height - 6;
-    }
-    card.style.left = left + "px";
-    card.style.top = Math.max(margin, top) + "px";
-
-    anchorEl.classList.add("is-active");
-    inlineChordCard = card;
-    inlineChordAnchor = anchorEl;
-
-    // Registered after this click has finished bubbling (same trick as the
-    // FAB menu), so the tap that opened the card doesn't also close it.
-    setTimeout(() => {
-      if (inlineChordAnchor !== anchorEl) return;
-      inlineChordOutsideHandler = (ev) => {
-        if (!ev.target.closest) return;
-        // Tapping the popover itself, or any chord (the same one -> close,
-        // a different one -> switch), is handled by the chord's own click
-        // handler above -- only a tap genuinely elsewhere closes it here.
-        if (ev.target.closest(".ss-chord-popover") || ev.target.closest(".ss-seg__chord--tap")) return;
-        closeInlineChordPopover();
-      };
-      document.addEventListener("pointerdown", inlineChordOutsideHandler, true);
-    }, 0);
-
-    // The card is positioned in fixed viewport coordinates, so it would
-    // drift away from its chord as soon as the sheet (or autoscroll) moves --
-    // simplest to just close it rather than re-track the anchor every frame.
-    const box = scrollContainer();
-    if (box) {
-      inlineChordScrollHandler = () => closeInlineChordPopover();
-      box.addEventListener("scroll", inlineChordScrollHandler, { passive: true });
-    }
-  }
-
   // Split a lyric string at each chord index; each piece carries the chord
   // that starts it in a block above. `white-space: pre` on the pieces keeps
-  // the spacing; the pieces are inline and wrap as whole units. In sync
-  // mode `disableChordTap` drops the chord's own tap handling so a tap
-  // anywhere on the line -- chord included -- reaches the line's own click
-  // handler (addSyncPoint) instead of opening the chord diagram. `lineIdx`
+  // the spacing; the pieces are inline and wrap as whole units. `lineIdx`
   // + `playAlongKeys` (a Set of "lineIdx:order" strings, or null when play
   // along isn't on) are only used to mark whichever chord occurrence is
-  // the currently-live play-along step -- see buildChordSteps(). +
-  // `instrumentOverride` ("guitar" | "piano") is passed straight through to
-  // the tapped-chord popover -- js/jam.js uses it so a jam follower can view
-  // diagrams in their own chosen instrument regardless of the host's.
-  function renderLine(line, disableChordTap, lineIdx, playAlongKeys, instrumentOverride) {
+  // the currently-live play-along step -- see buildChordSteps(). Chords are
+  // plain text: a tap on a line is handled by the line itself (seekToLine).
+  function renderLine(line, lineIdx, playAlongKeys) {
     const wrap = el("div", "ss-line");
     const chords = line.chords.slice().sort((a, b) => a.index - b.index);
     const lyric = line.lyric || "";
@@ -2584,13 +2510,6 @@
           chordEl.classList.add("ss-seg__chord--playalong");
         }
         realOrder += 1;
-      }
-      if (!disableChordTap && isRealChord) {
-        chordEl.classList.add("ss-seg__chord--tap");
-        chordEl.addEventListener("click", (e) => {
-          e.stopPropagation();
-          toggleInlineChordPopover(chordEl, ch.sym, instrumentOverride);
-        });
       }
       seg.appendChild(chordEl);
       seg.appendChild(el("span", "ss-seg__lyric", piece));

@@ -443,7 +443,16 @@
     pause();
   }
   function seekTo(ms) {
-    if (player) player.seek(Math.max(0, ms | 0)).catch(() => {});
+    if (!player) return;
+    ms = Math.max(0, ms | 0);
+    // getPosition() interpolates from the last state event, which only
+    // arrives a moment after the seek -- move it now so the lyric follow
+    // doesn't flick back to the old spot in between.
+    if (lastState) {
+      lastState = Object.assign({}, lastState, { position: ms });
+      lastStateAt = Date.now();
+    }
+    player.seek(ms).catch(() => {});
   }
 
   // Read by js/songsheet.js for lyric-sync autoscroll -- same interpolation
@@ -702,5 +711,5 @@
   function togglePlay() {
     if (player) player.togglePlay().catch(() => {});
   }
-  window.GuitarSpotify = { stop, pause, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, isLoggedIn };
+  window.GuitarSpotify = { stop, pause, seekTo, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, isLoggedIn };
 })();

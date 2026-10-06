@@ -414,5 +414,8 @@
   function playWhenReady() {
     playOnReady = true;
   }
-  window.GuitarBackingTrack = { stop, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, playWhenReady };
+  function seekTo(ms) {
+    if (ytPlayer && ytPlayer.seekTo) ytPlayer.seekTo(Math.max(0, ms) / 1000, true);
+  }
+  window.GuitarBackingTrack = { stop, seekTo, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, playWhenReady };
 })();
