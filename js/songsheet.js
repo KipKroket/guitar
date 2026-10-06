@@ -34,6 +34,8 @@
   const NOTE_IDX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const FLAT  = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+  // Flats where players expect them (Bb Eb Ab), sharps for the rest (C# F#).
+  const MIXED = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
   const FLAT_KEYS = new Set(["F", "Bb", "Eb", "Ab", "Db", "Gb", "Cb", "Dm", "Gm", "Cm", "Fm", "Bbm", "Ebm"]);
 
   // A whitespace-separated token that reads as a chord: a root note, an
@@ -413,7 +415,7 @@
     if (acc === "#") idx += 1;
     else if (acc === "b") idx -= 1;
     idx = ((idx + semis) % 12 + 12) % 12;
-    return (preferFlat ? FLAT : SHARP)[idx];
+    return (preferFlat === "mixed" ? MIXED : preferFlat ? FLAT : SHARP)[idx];
   }
 
   // Shift only the root (start of symbol) and a slash-bass note; leave the
@@ -431,7 +433,7 @@
 
   function transposeModel(model, semis) {
     if (!semis) return model;
-    const preferFlat = FLAT_KEYS.has((model.meta.key || "").trim()) || semis < 0;
+    const preferFlat = FLAT_KEYS.has((model.meta.key || "").trim()) || semis < 0 ? "mixed" : false;
     const sections = model.sections.map((s) => ({
       label: s.label,
       lines: s.lines.map((l) =>
@@ -441,6 +443,94 @@
       ),
     }));
     return { meta: model.meta, sections, chordCount: model.chordCount, lineCount: model.lineCount };
+  }
+
+  /* ================================================================
+     Capo
+     The sheet's chords are what the sheet says; with a "{capo: N}" they are
+     shapes for capo N, so they SOUND N semitones higher. The capo the user
+     plays with (song.capo, absolute, synced with the song) defaults to N, so
+     nothing changes until they touch it. Chords on screen =
+     written + N + transpose - capo.
+     ================================================================ */
+
+  const MAX_CAPO = 9;
+
+  function writtenCapo(model) {
+    const v = String((model.meta && model.meta.capo) || "").trim();
+    let n = parseInt(v, 10);
+    if (!(n > 0)) {
+      const roman = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9 };
+      n = roman[v.toLowerCase()] || 0;
+    }
+    return n > 0 && n <= 11 ? n : 0;
+  }
+
+  // The piano has no capo: whatever the sheet says is simply left alone.
+  function activeCapo(model) {
+    const written = writtenCapo(model);
+    if (!state || state.inst === "piano") return written;
+    const c = state.song && state.song.capo;
+    return Number.isInteger(c) && c >= 0 && c <= MAX_CAPO ? c : written;
+  }
+
+  // Semitones to move the sheet's chords by for display, kept in -5..+6 so
+  // the sharp/flat choice in transposeModel stays stable.
+  function displayShift(model) {
+    let n = writtenCapo(model) + ((state && state.record && state.record.transpose) | 0) - activeCapo(model);
+    n = ((n % 12) + 12) % 12;
+    return n > 6 ? n - 12 : n;
+  }
+
+  // How awkward a chord shape is on guitar: 0 = open, 1 = barre / sharps.
+  const OPEN_SHAPES = {
+    0: ["", "7", "maj7", "add9", "sus2", "sus4"],
+    2: ["", "m", "7", "m7", "maj7", "sus2", "sus4", "add9"],
+    4: ["", "m", "7", "m7", "sus4", "5"],
+    7: ["", "7", "maj7", "add9", "sus4", "6"],
+    9: ["", "m", "7", "m7", "maj7", "sus2", "sus4", "add9"],
+  };
+  function shapeCost(rootIdx, quality) {
+    let q = String(quality || "").replace(/\/.*$/, "");
+    if (/^(min|mi|-)$/.test(q)) q = "m";
+    else if (/^(min7|mi7|-7)$/.test(q)) q = "m7";
+    else if (/^(M7|Maj7|major7)$/.test(q)) q = "maj7";
+    if (OPEN_SHAPES[rootIdx]) return OPEN_SHAPES[rootIdx].includes(q) ? 0 : 1;
+    if (rootIdx === 11 && q === "7") return 0.4;
+    if (rootIdx === 5 && (q === "" || q === "maj7")) return 0.6;
+    return 1;
+  }
+
+  // Best capo positions (0-7) for the chords as they currently sound.
+  function suggestCapos(model) {
+    const counts = {};
+    model.sections.forEach((sec) =>
+      sec.lines.forEach((l) => {
+        if (!l) return;
+        l.chords.forEach((c) => {
+          const m = /^([A-G])(#|b)?(.*)$/.exec(c.sym.trim());
+          if (!m) return;
+          let idx = NOTE_IDX[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0);
+          const sounding = (((idx + writtenCapo(model) + ((state.record.transpose | 0))) % 12) + 12) % 12;
+          const k = sounding + "|" + m[3];
+          counts[k] = (counts[k] || 0) + 1;
+        });
+      })
+    );
+    const entries = Object.keys(counts);
+    if (!entries.length) return [];
+    const total = entries.reduce((a, k) => a + counts[k], 0);
+    const out = [];
+    for (let capo = 0; capo <= 7; capo++) {
+      let cost = 0;
+      entries.forEach((k) => {
+        const [root, q] = k.split("|");
+        cost += counts[k] * shapeCost((((+root - capo) % 12) + 12) % 12, q);
+      });
+      out.push({ capo, cost: cost / total });
+    }
+    out.sort((a, b) => a.cost - b.cost || a.capo - b.capo);
+    return out.slice(0, 3);
   }
 
   // Real chord symbols only -- bar lines, "N.C.", repeat marks and the like
@@ -761,7 +851,7 @@
         artist: (state.song && state.song.artist) || "",
         art: (state.song && state.song.artworkUrl) || null,
       },
-      sheet: { raw: state.record.raw, transpose: state.record.transpose | 0 },
+      sheet: { raw: state.record.raw, transpose: displayShift(parseSheet(state.record.raw)) },
       mode: "none",
       pos: { line: null, index: null },
     };
@@ -1512,7 +1602,7 @@
 
   async function startPlayAlong() {
     const model = parseSheet(state.record.raw);
-    const shown = transposeModel(model, state.record.transpose | 0);
+    const shown = transposeModel(model, displayShift(model));
     const steps = buildChordSteps(shown);
     if (!steps.length) return;
 
@@ -1791,7 +1881,111 @@
   // so the whole bar is redrawn, not just the ♪ button.
   document.addEventListener("audiodockpanelchange", () => renderTransport());
 
-  /* ---- Display sheet: key, chords on/off, scroll mode --------------------
+  /* ---- Key & capo sheet (opened from the chip in the chord strip) ---- */
+  function setCapo(c) {
+    state.song.capo = c;
+    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
+      window.GuitarLibrary.setSongField(state.song.id, { capo: c });
+    }
+    render();
+  }
+
+  function openKeyCapoSheet() {
+    if (!state || !state.record) return;
+    const UI = window.GuitarUI;
+    const guitar = state.inst !== "piano";
+    UI.openSheet({
+      title: guitar ? "Key & capo" : "Key",
+      render(body) {
+        const model = parseSheet(state.record.raw);
+        const written = writtenCapo(model);
+        let list = null;
+
+        function drawSuggestions() {
+          if (!list) return;
+          list.textContent = "";
+          const shownNow = parseSheet(state.record.raw);
+          suggestCapos(shownNow).forEach((o) => {
+            const shapes = uniqueChords(transposeModel(shownNow, writtenCapo(shownNow) + (state.record.transpose | 0) - o.capo))
+              .slice(0, 6)
+              .join(" ");
+            const b = el("button", "ui-pick" + (o.capo === activeCapo(shownNow) ? " is-active" : ""));
+            b.type = "button";
+            b.appendChild(el("b", null, o.capo ? "Capo " + o.capo : "No capo"));
+            b.appendChild(el("span", null, shapes));
+            b.addEventListener("click", () => {
+              setCapo(o.capo);
+              drawSuggestions();
+              if (capoVal) capoVal();
+            });
+            list.appendChild(b);
+          });
+        }
+
+        let capoVal = null;
+        if (guitar) {
+          const row = UI.stepperRow(
+            "Capo",
+            written ? "Sheet: capo " + written : "",
+            (v) => (v ? String(v) : "Off"),
+            (delta) => {
+              const cur = activeCapo(parseSheet(state.record.raw));
+              if (delta) {
+                const next = Math.max(0, Math.min(MAX_CAPO, cur + delta));
+                if (next !== cur) {
+                  setCapo(next);
+                  drawSuggestions();
+                }
+              }
+              return activeCapo(parseSheet(state.record.raw));
+            }
+          );
+          body.appendChild(row);
+          const btn = el("button", "songsheet__btn songsheet__btn--sm", "Suggest capo");
+          btn.type = "button";
+          btn.addEventListener("click", () => {
+            if (list) {
+              list.remove();
+              list = null;
+              btn.classList.remove("is-active");
+              return;
+            }
+            list = el("div", "ui-picks");
+            btn.classList.add("is-active");
+            btn.after(list);
+            drawSuggestions();
+          });
+          body.appendChild(btn);
+          capoVal = () => {
+            const b = row.querySelector(".ui-stepper b");
+            if (b) b.textContent = activeCapo(parseSheet(state.record.raw)) || "Off";
+          };
+        }
+
+        const key = (model.meta.key || "").trim();
+        let keyRow = null;
+        keyRow = UI.stepperRow(
+          "Key",
+          key ? "Original key " + key : "Semitones",
+          (v) => (v > 0 ? "+" + v : v < 0 ? "−" + Math.abs(v) : "0"),
+          (delta) => {
+            if (delta) {
+              bumpTranspose(delta);
+              drawSuggestions();
+              if (capoVal) capoVal();
+            }
+            const t = state.record.transpose | 0;
+            const hint = keyRow && keyRow.querySelector("small");
+            if (hint) hint.textContent = t ? "Won't match the recording" : key ? "Original key " + key : "Semitones";
+            return t;
+          }
+        );
+        body.appendChild(keyRow);
+      },
+    });
+  }
+
+  /* ---- Display sheet: chords on/off, scroll mode --------------------
      Everything that changes how the sheet reads, in one place instead of
      spread over the song screen. ---- */
   function openDisplaySheet() {
@@ -1800,19 +1994,6 @@
     UI.openSheet({
       title: "Display",
       render(body) {
-        const model = parseSheet(state.record.raw);
-        const key = (model.meta.key || "").trim();
-        body.appendChild(
-          UI.stepperRow(
-            "Key",
-            key ? "Original key " + key : "Semitones up or down",
-            (v) => (v > 0 ? "+" + v : v < 0 ? "−" + Math.abs(v) : "0"),
-            (delta) => {
-              if (delta) bumpTranspose(delta);
-              return state.record.transpose | 0;
-            }
-          )
-        );
         body.appendChild(
           UI.switchRow("Show chords", "Off leaves just the lyrics", showChordsPref(), (on) => {
             saveShowChords(on);
@@ -2317,12 +2498,17 @@
     strip.textContent = "";
     card.hidden = true;
     card.textContent = "";
-    const capo = model.meta.capo;
-    if ((!chordSyms.length && !capo) || !showChordsPref()) {
+    if (!chordSyms.length || !showChordsPref()) {
       strip.hidden = true;
       return;
     }
     strip.hidden = false;
+
+    const keyCapo = el("button", "songsheet__chips-capo", keyCapoLabel(model));
+    keyCapo.type = "button";
+    keyCapo.setAttribute("aria-label", "Key and capo");
+    keyCapo.addEventListener("click", openKeyCapoSheet);
+    strip.appendChild(keyCapo);
 
     let openSym = null;
     let swapMode = false;
@@ -2394,13 +2580,22 @@
       });
       strip.appendChild(chip);
     });
-    if (capo) strip.appendChild(el("span", "songsheet__chips-capo", "Capo " + capo));
+  }
+
+  function keyCapoLabel(model) {
+    const t = (state.record.transpose | 0);
+    const parts = [];
+    if (state.inst !== "piano") {
+      const c = activeCapo(model);
+      parts.push(c ? "Capo " + c : "No capo");
+    }
+    if (t) parts.push("Key " + (t > 0 ? "+" + t : "−" + Math.abs(t)));
+    return parts.join(" · ") || "Key";
   }
 
   function renderSheet() {
     const model = parseSheet(state.record.raw);
-    const semis = state.record.transpose | 0;
-    const shown = transposeModel(model, semis);
+    const shown = transposeModel(model, displayShift(model));
 
     // Only the two temporary modes get a bar of their own -- placing sync
     // timestamps and play along. Everything else lives in the transport bar
@@ -2621,7 +2816,7 @@
   function swapChord(oldDisplayedSym, newDisplayedSym) {
     if (!state || !state.record || !newDisplayedSym || oldDisplayedSym === newDisplayedSym) return;
     const model = parseSheet(state.record.raw);
-    const semis = state.record.transpose | 0;
+    const semis = displayShift(model);
     const shown = transposeModel(model, semis);
     const rawSyms = collectRawSymsFor(model, shown, oldDisplayedSym);
     if (!rawSyms.size) return;
@@ -2631,7 +2826,7 @@
     rawSyms.forEach((oldRawSym) => {
       raw = replaceChordInRaw(raw, oldRawSym, newRawSym);
     });
-    saveSheet(state.inst, state.song.id, { raw, source: state.record.source, transpose: semis });
+    saveSheet(state.inst, state.song.id, { raw, source: state.record.source, transpose: state.record.transpose | 0 });
     state.record = loadSheet(state.inst, state.song.id);
     render();
   }

@@ -2294,7 +2294,13 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 .detail-chordstrip::-webkit-scrollbar { display: none; }
 .detail-chordstrip .songsheet__chip { flex: none; padding: 0.3rem 0.65rem; font-size: 0.86rem; background: var(--surface-raised); color: var(--amber-deep); font-weight: 600; }
 .detail-chordstrip .songsheet__chip.is-active { background: var(--amber); color: var(--bg); }
-.songsheet__chips-capo { flex: none; align-self: center; font-size: 0.82rem; color: var(--ink-soft); margin-left: 0.3rem; white-space: nowrap; }
+.songsheet__chips-capo {
+  flex: none; align-self: center; white-space: nowrap;
+  padding: 0.3rem 0.65rem; border-radius: 9px; border: 1px solid var(--line);
+  background: transparent; color: var(--ink-soft); font: inherit; font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.songsheet__chips-capo:active { transform: translateY(1px); }
 .detail-chordcard {
   flex: none;
   max-height: 46%;
@@ -2528,6 +2534,14 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 .ui-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.98rem; }
 .ui-row__text { display: flex; flex-direction: column; min-width: 0; }
 .ui-row__text small { color: var(--ink-soft); font-size: 0.78rem; margin-top: 0.1rem; }
+.ui-picks { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; }
+.ui-pick {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+  padding: 0.6rem 0.8rem; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 0.92rem; text-align: left; cursor: pointer;
+}
+.ui-pick span { color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.ui-pick.is-active { border-color: var(--amber); }
 .ui-row--range { flex-direction: column; align-items: stretch; gap: 0.4rem; }
 .ui-row--range .ui-row__text { flex-direction: row; justify-content: space-between; }
 .ui-switch {
