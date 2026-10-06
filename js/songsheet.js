@@ -521,13 +521,6 @@
     return level * 8; // 8..80 px/s
   }
 
-  // Per-line char-length weights for the currently rendered sheet (index ==
-  // the same flat line index sync points are stored against) -- rebuilt by
-  // renderSheet() each time, read by computeVirtualLine()'s weighted split
-  // of a gap between two anchors so a long line doesn't scroll past at the
-  // same pace as a short one.
-  let lineWeights = [];
-
   let scrollRAF = null;
   let scrollLastTs = null;
   // Our own float target position, independent of what box.scrollTop
@@ -548,13 +541,20 @@
     return document.getElementById("detail-scroll") || root.closest(".overlay") || document.scrollingElement || document.documentElement;
   }
 
+  // Forgets the scroll position we were accumulating (and the sub-pixel
+  // transform) so the next scroll starts from where the box really is. The
+  // frame loop itself (autoscrollTick) keeps running while a sheet is open --
+  // it also drives the line highlight and the audio-following scroll.
   function stopAutoscroll() {
-    if (scrollRAF != null) cancelAnimationFrame(scrollRAF);
-    scrollRAF = null;
     scrollLastTs = null;
     scrollPos = null;
     scrollWritten = null;
     if (panel) panel.style.transform = "";
+  }
+  function stopLoop() {
+    if (scrollRAF != null) cancelAnimationFrame(scrollRAF);
+    scrollRAF = null;
+    stopAutoscroll();
   }
 
   // scrollTop can only ever land on a whole pixel, so at a slow tempo (a
@@ -606,56 +606,6 @@
       if (stopIfAtBottom(box, scrollPos)) return;
     }
     scrollLastTs = ts;
-  }
-
-  // Distributes the gap between two synced lines (lineA..lineB) by each
-  // line's character length rather than splitting it evenly -- a long verse
-  // line takes longer to sing than a short chorus line, so the target
-  // position should move through it more slowly.
-  function interpolateWeighted(lineA, lineB, frac) {
-    if (lineB <= lineA) return lineA;
-    const w = [];
-    let total = 0;
-    for (let i = lineA; i < lineB; i++) {
-      const wt = Math.max(1, lineWeights[i] || 1);
-      w.push(wt);
-      total += wt;
-    }
-    let target = frac * total;
-    let acc = 0;
-    for (let i = 0; i < w.length; i++) {
-      if (target <= acc + w[i]) return lineA + i + (target - acc) / w[i];
-      acc += w[i];
-    }
-    return lineB;
-  }
-
-  // Maps the current playback position to a fractional "virtual line" --
-  // e.g. 4.3 means 30% of the way from line 4 into line 5 -- by finding the
-  // pair of anchors either side of it and interpolating between them.
-  // Before the first anchor / after the last, it keeps extrapolating at that
-  // edge segment's own pace rather than freezing, so a stretch you haven't
-  // tagged yet still drifts forward at a plausible rate instead of stopping
-  // dead. `points` must be sorted ascending by ms (see addSyncPoint).
-  function computeVirtualLine(points, posMs) {
-    const n = points.length;
-    if (posMs <= points[0].ms) {
-      const a = points[0], b = points[1];
-      const pace = (b.line - a.line) / ((b.ms - a.ms) || 1);
-      return Math.max(0, a.line + pace * (posMs - a.ms));
-    }
-    if (posMs >= points[n - 1].ms) {
-      const a = points[n - 2], b = points[n - 1];
-      const pace = (b.line - a.line) / ((b.ms - a.ms) || 1);
-      return b.line + pace * (posMs - b.ms);
-    }
-    for (let i = 0; i < n - 1; i++) {
-      const a = points[i], b = points[i + 1];
-      if (posMs >= a.ms && posMs <= b.ms) {
-        return interpolateWeighted(a.line, b.line, (posMs - a.ms) / ((b.ms - a.ms) || 1));
-      }
-    }
-    return points[0].line;
   }
 
   function lineElAt(idx) {
@@ -786,11 +736,16 @@
     if (state.playAlong.on) {
       snapshot.mode = "playalong";
       snapshot.pos.index = state.playAlong.index;
-    } else if (state.autoscroll.on && panel) {
-      const box = scrollContainer();
-      const synced = !state.autoscroll.forceManual && getActivePlayback();
-      snapshot.mode = synced ? "timestamps" : "autoscroll";
-      snapshot.pos.line = scrollTopToVirtualLine(box);
+    } else if (panel) {
+      const active = getActivePlayback();
+      if (active && active.playing && followsAudio()) {
+        // Following the recording: followers get the line that is lit.
+        snapshot.mode = "timestamps";
+        snapshot.pos.line = state.timing.nowLine >= 0 ? state.timing.nowLine : null;
+      } else if (state.autoscroll.on) {
+        snapshot.mode = "autoscroll";
+        snapshot.pos.line = scrollTopToVirtualLine(scrollContainer());
+      }
     }
     // Deliberately NOT reporting a position when autoscroll is off, even
     // though the host may well be scrolling by hand -- a follower's own
@@ -801,259 +756,580 @@
     return snapshot;
   }
 
-  function tickSynced(box, synced) {
-    // Manual pacing's own clock is stale once we're back in manual mode
-    // (forceManual toggled, or playback stopped) -- null it so tickManual
-    // doesn't apply a huge dt built up while synced mode was driving.
-    scrollLastTs = null;
-    const y = virtualLineToScrollTop(box, computeVirtualLine(synced.points, synced.posMs));
-    if (y != null) {
-      scrollPos = y;
-      writeScroll(box, y);
-      stopIfAtBottom(box, y);
+  /* ---- The frame loop ---------------------------------------------------------
+     Runs while a sheet is open. Every frame: notice a newly loaded recording
+     (starts the LRCLIB lookup), and then either follow the recording -- the
+     line that is about to be sung is highlighted and eased into view -- or,
+     as the fallback, scroll at the fixed tempo while that is switched on. ---- */
+  let nowEl = null;
+  let userScrollUntil = 0; // after the user scrolls by hand, leave the view alone for a moment
+  let lastNowIdx = -2;
+  let settling = false;
+  let wasFollowing = false;
+  let transportSig = "";
+  let scrollListening = false;
+
+  function applyNowHighlight(idx) {
+    const target = idx >= 0 && panel ? lineElAt(idx) : null;
+    if (target === nowEl && (!target || target.classList.contains("ss-line--now"))) return;
+    if (nowEl) nowEl.classList.remove("ss-line--now");
+    nowEl = target;
+    if (target) {
+      void target.offsetWidth; // restart the little flash
+      target.classList.add("ss-line--now");
     }
+  }
+
+  function markUserScroll() {
+    userScrollUntil = performance.now() + 4000;
+    scrollPos = null;
+    scrollWritten = null;
   }
 
   function autoscrollTick(ts) {
-    const active =
-      state && state.expanded && state.record && !state.adding && state.autoscroll.on;
-    if (!active) {
-      stopAutoscroll();
-      // Something other than an explicit toggle-off stopped us (the panel
-      // collapsed, the sheet went into edit mode, ...) -- reflect that in
-      // state so the checkbox/FAB don't claim autoscroll is still on with
-      // nothing actually moving.
-      if (state && state.autoscroll && state.autoscroll.on) {
-        state.autoscroll.on = false;
-        render();
-      }
+    scrollRAF = requestAnimationFrame(autoscrollTick);
+    if (!state || !state.expanded || !state.record || state.adding || state.candidates) {
+      scrollLastTs = null;
       return;
     }
     const box = scrollContainer();
-    const synced = effectiveSyncedMode();
-    if (synced) tickSynced(box, synced);
-    else tickManual(box, ts);
-    if (!state || !state.autoscroll.on) return; // tickManual may have stopped it (reached the bottom)
-    scrollRAF = requestAnimationFrame(autoscrollTick);
+    const active = getActivePlayback();
+    updateTimingFor(active);
+    const T = state.timing;
+    const following = !!(active && T && !state.autoscroll.forceManual && timingReady());
+    const now = performance.now();
+    const dt = scrollLastTs != null ? Math.min(0.1, (ts - scrollLastTs) / 1000) : 0;
+
+    if (following) {
+      const cur = AS.currentLine(T.anchors, active.ms - T.offsetMs + leadMs);
+      const idx = cur.at < 0 ? -1 : cur.line;
+      T.nowLine = idx;
+      applyNowHighlight(idx);
+      if (!wasFollowing) {
+        scrollPos = null;
+        scrollWritten = null;
+      }
+      if (now < userScrollUntil || inlineChordCard) {
+        scrollPos = null;
+        scrollWritten = null;
+      } else if (active.playing || idx !== lastNowIdx || settling) {
+        let y = virtualLineToScrollTop(box, idx < 0 ? 0 : idx);
+        if (y != null) {
+          y = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, y));
+          if (scrollPos == null) {
+            scrollPos = box.scrollTop;
+            scrollWritten = scrollPos;
+          }
+          scrollPos += (y - scrollPos) * (dt ? 1 - Math.exp(-dt * 6) : 1);
+          writeScroll(box, scrollPos);
+          settling = Math.abs(y - scrollPos) > 1;
+        }
+      }
+      lastNowIdx = idx;
+      scrollLastTs = ts;
+    } else {
+      if (wasFollowing) stopAutoscroll();
+      if (T) T.nowLine = -1;
+      applyNowHighlight(-1);
+      lastNowIdx = -2;
+      settling = false;
+      if (state.autoscroll.on && !inlineChordCard) tickManual(box, ts);
+      else scrollLastTs = null;
+    }
+    wasFollowing = following;
+
+    // the transport bar follows what the recording does
+    const sig = [audioLoaded() ? 1 : 0, active && active.playing ? 1 : 0, T ? T.status : "-", state.autoscroll.on ? 1 : 0, state.autoscroll.forceManual ? 1 : 0, following ? 1 : 0].join();
+    if (sig !== transportSig) {
+      transportSig = sig;
+      renderTransport();
+    }
   }
 
+  // Starts the frame loop (once per open sheet) and listens for the user
+  // scrolling by hand, which pauses the following for a few seconds.
+  function startLoop() {
+    if (scrollRAF == null) scrollRAF = requestAnimationFrame(autoscrollTick);
+    if (!scrollListening) {
+      const box = scrollContainer();
+      ["wheel", "touchstart", "touchmove"].forEach((ev) => box.addEventListener(ev, markUserScroll, { passive: true }));
+      scrollListening = true;
+    }
+  }
+  // Switches fixed-tempo scrolling on from a clean start.
   function startAutoscroll() {
-    if (scrollRAF != null) return;
     scrollLastTs = null;
     scrollPos = null;
     scrollWritten = null;
-    scrollRAF = requestAnimationFrame(autoscrollTick);
+    startLoop();
   }
 
-  /* ---- Lyric sync -- ties lyric lines to a Spotify/YouTube position ----
-     Sync points are `{ line, ms, text }`, kept sorted by ms, stored as one
-     flat list on the song itself -- `song.lyricsSync` (via
-     GuitarLibrary.setSongField, same as spotifyTrackId/backingTrackUrl),
-     NOT inside the sheet record. That's deliberate: the sheet record lives
-     in its own untracked storage key that never reaches cloud sync or
-     export (the raw chord/lyric text is usually copyrighted), but a
-     timestamp map has no copyrighted content of its own and the user
-     explicitly wants it backed up alongside the YouTube link it's checked
-     against -- setSongField already rides along with sync/export for
-     exactly this kind of small per-song metadata.
-     One list per SONG, not per recording (Spotify track / YouTube video) --
-     a song's lyric timing is practically the same take to take (a few
-     seconds off here and there doesn't matter for autoscroll), and the
-     whole point is to tag it once and have it work for whichever version
-     you happen to be playing back next time. `getActivePlayback()` below
-     still reports which recording is live (for its playback position, ms),
-     it just no longer decides which timestamp list to read.
-     `text` is the tagged line's own normalized lyric text, kept alongside
-     `line` so a re-fetched or re-pasted sheet -- which renumbers/rewords
-     every line -- has something sturdier than the old index to recover the
-     point against; see remapOrClearLyricsSync(). Points saved by earlier
-     builds don't have `text` yet -- remap falls back to reading it from the
-     sheet text that was still current when the edit happened. */
+  /* ---- Automatic timing -----------------------------------------------------
+     When a recording (Spotify / YouTube) is loaded in the audio bar, the song's
+     lyric timing comes from LRCLIB (js/autosync.js): look the song up by
+     artist + title + the recording's length, take the version that fits, and
+     match its lines to this sheet's lines. The result is a list of anchors
+     { ms, line, h } -- h is a short hash of the line, never its text -- kept
+     on this device only, per song and recording (TIMING_KEY), together with
+     the offset the user last set for that recording.
+     While the recording plays the sheet follows it: the line that is about to
+     be sung is highlighted (`leadMs` before it starts, and it stays put
+     through instrumental parts) and the view scrolls to it. Fixed-tempo
+     autoscroll is the fallback when there is no recording, no timing found,
+     or the user asks for it. ---- */
 
-  function clearLyricsSync() {
-    if (!state || !state.song) return;
-    state.song.lyricsSync = [];
-    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
-      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: [] });
+  const AS = window.AutoSync;
+  const TIMING_KEY = "guitar-autotiming";
+  const LEAD_KEY = "guitar-autosync-lead";
+  let leadMs = (function () {
+    try {
+      const v = parseInt(localStorage.getItem(LEAD_KEY), 10);
+      return v >= 0 && v <= 3000 ? v : 1000;
+    } catch (e) {
+      return 1000;
+    }
+  })();
+
+  function lsGet(key, fallback) {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+  function lsSet(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      /* quota -- the timing is simply looked up again next time */
     }
   }
 
-  // Reads state.song.lyricsSync, migrating the old Build 31-41 shape (an
-  // object keyed by source recording, `{ "spotify:<id>": [{line,ms}] }`) to
-  // the new flat per-song list the first time it's seen, in place -- a
-  // song's timestamps used to differ by a few seconds per recording anyway,
-  // so flattening every recording's points together and letting duplicates
-  // (one per line, closest ms wins via the same "tapping again replaces"
-  // rule used elsewhere) sort out is fine.
-  function getSyncPoints() {
-    if (!state || !state.song) return [];
-    const raw = state.song.lyricsSync;
-    if (Array.isArray(raw)) return raw;
-    if (raw && typeof raw === "object") {
-      const byLine = new Map();
-      Object.keys(raw).forEach((k) => (raw[k] || []).forEach((p) => byLine.set(p.line, p)));
-      const flat = Array.from(byLine.values()).sort((a, b) => a.ms - b.ms);
-      saveSyncPoints(flat);
-      return flat;
-    }
-    return [];
+  function freshTiming(key) {
+    return {
+      key,
+      status: "idle", // idle -> looking -> synced | warn | none | error
+      note: "",
+      error: "",
+      ranked: [],
+      index: 0,
+      cand: null,
+      map: null,
+      anchors: [],
+      offsetMs: 0,
+      touched: false,
+      dismissed: false,
+      stored: null,
+      durMs: 0,
+      durDiff: 0,
+      nowLine: -1,
+      t0: performance.now(),
+    };
   }
 
+  // Normalized lyric text of every line, in the same flat numbering the
+  // rendered lines (data-line-idx) and the anchors use.
+  function sheetLineNorms() {
+    if (!state || !state.record) return [];
+    if (state.normsRaw !== state.record.raw) {
+      const out = [];
+      parseSheet(state.record.raw).sections.forEach((section) =>
+        section.lines.forEach((line) => {
+          if (line != null) out.push(AS.norm(line.lyric));
+        })
+      );
+      state.norms = out;
+      state.normsRaw = state.record.raw;
+    }
+    return state.norms;
+  }
+
+  // The recording that is loaded in the audio bar, with its live position.
   function getActivePlayback() {
-    if (
-      window.GuitarAudioDock &&
-      window.GuitarAudioDock.isNowPlaying("spotify") &&
-      window.GuitarSpotify &&
-      window.GuitarSpotify.getPosition
-    ) {
-      const key = window.GuitarSpotify.getSourceKey && window.GuitarSpotify.getSourceKey();
-      const ms = window.GuitarSpotify.getPosition();
-      if (key && ms != null) return { key, ms };
+    const dock = window.GuitarAudioDock;
+    if (!dock) return null;
+    if (dock.isNowPlaying("spotify") && window.GuitarSpotify && window.GuitarSpotify.getPosition) {
+      const S = window.GuitarSpotify;
+      const key = S.getSourceKey && S.getSourceKey();
+      const ms = S.getPosition();
+      if (key && ms != null) return { key, ms, dur: S.getDuration(), playing: S.isPlaying() };
     }
-    if (
-      window.GuitarAudioDock &&
-      window.GuitarAudioDock.isNowPlaying("backingtrack") &&
-      window.GuitarBackingTrack &&
-      window.GuitarBackingTrack.getPosition
-    ) {
-      const key = window.GuitarBackingTrack.getSourceKey && window.GuitarBackingTrack.getSourceKey();
-      const ms = window.GuitarBackingTrack.getPosition();
-      if (key && ms != null) return { key, ms };
+    if (dock.isNowPlaying("backingtrack") && window.GuitarBackingTrack && window.GuitarBackingTrack.getPosition) {
+      const B = window.GuitarBackingTrack;
+      const key = B.getSourceKey && B.getSourceKey();
+      const ms = B.getPosition();
+      if (key && ms != null) return { key, ms, dur: B.getDuration(), playing: B.isPlaying() };
     }
     return null;
   }
 
-  // Whether a recording (Spotify / YouTube) is loaded in the audio bar. It
-  // counts from the moment it is cued, not only once it has a playback
-  // position, so the scroll mode can switch the instant a track is loaded.
+  // Whether a recording is loaded in the audio bar -- from the moment it is
+  // cued, not only once it has a playback position.
   function audioLoaded() {
     const dock = window.GuitarAudioDock;
     return !!(dock && (dock.isNowPlaying("spotify") || dock.isNowPlaying("backingtrack")));
   }
-
-  // Whether this song could follow the audio at all: a recording is loaded
-  // and the song has timestamps to follow. The user can still choose a fixed
-  // tempo instead (forceManual).
-  function hasSyncAvailable() {
-    return !!(state && state.song && audioLoaded() && getSyncPoints().length >= 2);
+  function timingReady() {
+    const T = state && state.timing;
+    return !!(T && (T.status === "synced" || T.status === "warn") && T.anchors.length >= 2);
   }
-
+  // Could this song follow the audio right now (timing found)?
+  function hasSyncAvailable() {
+    return !!(state && audioLoaded() && timingReady());
+  }
+  // Is it following (the user has not chosen fixed tempo)?
   function followsAudio() {
     return hasSyncAvailable() && !state.autoscroll.forceManual;
   }
-
-  // What autoscroll should actually do this frame: null falls back to the
-  // fixed-speed manual tick. Needs at least two points to interpolate
-  // between; the override toggle (forceManual) always wins.
-  function effectiveSyncedMode() {
-    if (!state || !state.song || state.autoscroll.forceManual) return null;
-    const active = getActivePlayback();
-    if (!active) return null;
-    const points = getSyncPoints();
-    if (points.length < 2) return null;
-    return { points, posMs: active.ms };
+  // Is the play button meant to drive the recording -- timing found, or still
+  // being looked up?
+  function playDrivesAudio() {
+    const T = state && state.timing;
+    return !!(state && audioLoaded() && !state.autoscroll.forceManual && T && (T.status === "looking" || T.status === "idle" || timingReady()));
   }
 
-  function formatSyncTime(ms) {
-    const s = Math.max(0, Math.round((ms || 0) / 1000));
+  function timingKey() {
+    return state.song.id + "|" + state.timing.key;
+  }
+  function loadStoredTiming(norms) {
+    const st = lsGet(TIMING_KEY, {})[timingKey()];
+    if (!st || !Array.isArray(st.a) || st.a.length < 2) return null;
+    let bad = 0;
+    st.a.forEach((a) => {
+      if (!norms[a[1]] || AS.hashLine(norms[a[1]]) !== a[2]) bad++;
+    });
+    return bad > st.a.length * 0.2 ? null : st; // the sheet changed under it
+  }
+  function persistTiming() {
+    const T = state && state.timing;
+    if (!T || !T.anchors.length) return;
+    const all = lsGet(TIMING_KEY, {});
+    const c = T.cand;
+    all[timingKey()] = {
+      a: T.anchors.map((a) => [a.ms, a.line, a.h]),
+      off: T.offsetMs,
+      touched: T.touched,
+      diff: T.durDiff,
+      lrc: c ? { artist: c.artistName, name: c.trackName, duration: c.duration } : (T.stored && T.stored.lrc) || null,
+      stats: T.map ? { pct: T.map.pct, coverage: T.map.coverage, jumps: T.map.jumps, lrcLines: T.map.lrcLines } : (T.stored && T.stored.stats) || null,
+      at: Date.now(),
+    };
+    const keys = Object.keys(all);
+    if (keys.length > 80) keys.sort((x, y) => all[x].at - all[y].at).slice(0, keys.length - 80).forEach((k) => delete all[k]);
+    lsSet(TIMING_KEY, all);
+  }
+
+  // Called every frame with whatever is loaded in the audio bar: starts the
+  // lookup when a new recording shows up (once its length is known), and
+  // forgets the timing when the recording goes away.
+  function updateTimingFor(active) {
+    if (!active) {
+      if (state.timing) {
+        state.timing = null;
+        state.calibrating = false;
+        renderTiming();
+        renderTransport();
+      }
+      return;
+    }
+    let T = state.timing;
+    if (!T || T.key !== active.key) {
+      T = state.timing = freshTiming(active.key);
+      state.calibrating = false;
+      renderTransport();
+    }
+    if (T.status === "idle" && (active.dur > 0 || performance.now() - T.t0 > 3000)) {
+      T.durMs = active.dur || 0;
+      startLookup(false);
+    }
+  }
+
+  async function startLookup(force) {
+    const mine = state;
+    const T = state.timing;
+    const song = state.song;
+    const norms = sheetLineNorms();
+    if (!norms.some(Boolean)) {
+      T.status = "none";
+      T.note = "nosheet";
+      renderTiming();
+      return;
+    }
+    if (!force) {
+      const st = loadStoredTiming(norms);
+      if (st) {
+        T.anchors = st.a.map((a) => ({ ms: a[0], line: a[1], h: a[2] }));
+        T.offsetMs = st.off || 0;
+        T.touched = !!st.touched;
+        T.durDiff = st.diff || 0;
+        T.stored = st;
+        afterChoice();
+        return;
+      }
+    }
+    T.status = "looking";
+    T.stored = null;
+    renderTiming();
+    renderTransport();
+    let cands;
+    try {
+      cands = await AS.lookup(song.artist, song.title);
+    } catch (e) {
+      if (state !== mine || state.timing !== T) return;
+      T.status = "error";
+      T.error = String((e && e.message) || e);
+      renderTiming();
+      renderTransport();
+      return;
+    }
+    if (state !== mine || state.timing !== T) return;
+    if (!cands.length) {
+      T.status = "none";
+      T.note = "notfound";
+      renderTiming();
+      renderTransport();
+      return;
+    }
+    T.ranked = AS.rank(cands, T.durMs / 1000);
+    applyChoice(AS.choose(T.ranked, norms, 0, 3));
+  }
+
+  // The sheet's lines were renumbered or reworded: the anchors no longer
+  // belong to it, so the next frame looks the recording up again.
+  function sheetChanged() {
+    if (!state) return;
+    state.timing = null;
+    state.calibrating = false;
+    state.normsRaw = null;
+  }
+
+  function applyChoice(choice) {
+    const T = state.timing;
+    if (!choice || choice.map.pct < 0.5) {
+      // Too little of the lyrics matches: probably another song or another language.
+      T.status = "none";
+      T.note = "mismatch";
+      T.map = choice ? choice.map : null;
+      renderTiming();
+      renderTransport();
+      return;
+    }
+    T.index = choice.index;
+    T.cand = choice.cand;
+    T.map = choice.map;
+    T.anchors = choice.map.anchors;
+    T.stored = null;
+    T.durDiff = T.durMs && choice.cand.duration ? T.durMs / 1000 - choice.cand.duration : 0;
+    afterChoice();
+  }
+
+  function afterChoice() {
+    const T = state.timing;
+    T.status = Math.abs(T.durDiff) > 2 && !T.touched ? "warn" : "synced";
+    persistTiming();
+    // The recording is not the length of the version LRCLIB has: ask right
+    // away which line is being sung, instead of making the user dig for it.
+    if (T.status === "warn" && !T.dismissed && !state.calibrating) {
+      state.calibrating = true;
+      render();
+    }
+    renderTiming();
+    renderTransport();
+  }
+
+  function setOffset(ms) {
+    const T = state.timing;
+    if (!T) return;
+    T.offsetMs = Math.max(-60000, Math.min(60000, Math.round(ms / 10) * 10));
+    T.touched = true;
+    if (T.status === "warn") T.status = "synced";
+    persistTiming();
+    renderTiming();
+    renderTransport();
+  }
+
+  // Quick fix: the user taps the line that is being sung right now.
+  function setCalibrating(on) {
+    if (!state || state.calibrating === on) return;
+    state.calibrating = on;
+    if (!on && state.timing) state.timing.dismissed = true;
+    render();
+  }
+  function calibrateTo(idx) {
+    const T = state.timing;
+    const active = getActivePlayback();
+    if (!T || !active) return;
+    const now = active.ms - T.offsetMs;
+    let best = null;
+    T.anchors.forEach((a) => {
+      if (a.line === idx && (!best || Math.abs(a.ms - now) < Math.abs(best.ms - now))) best = a;
+    });
+    if (!best) {
+      T.hint = "That line has no timing. Tap a line next to it.";
+      renderTiming();
+      return;
+    }
+    T.hint = "";
+    state.calibrating = false;
+    setOffset(active.ms - (best.ms + 700)); // about 0.7 s to react
+    render();
+  }
+
+  function fmtMmss(sec) {
+    const s = Math.max(0, Math.round(sec || 0));
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
+  function fmtSigned(ms) {
+    const v = ms / 1000;
+    return (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2).replace(/0$/, "") + " s";
+  }
 
-  function saveSyncPoints(points) {
-    if (!state || !state.song) return;
-    state.song.lyricsSync = points;
-    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
-      window.GuitarLibrary.setSongField(state.song.id, { lyricsSync: points });
+  /* ---- The timing pill under the title, and the quick-fix banner ---- */
+  const PILL = {
+    looking: { cls: "is-looking", icon: "", text: "Looking up timing…" },
+    synced: { cls: "", icon: "✓", text: "Synced" },
+    warn: { cls: "is-warn", icon: "!", text: "Timing may be off" },
+    none: { cls: "is-none", icon: "–", text: "No timing found · fixed tempo" },
+    error: { cls: "is-error", icon: "!", text: "Couldn't reach LRCLIB · tap to retry" },
+  };
+  function renderTiming() {
+    const host = document.getElementById("detail-timing");
+    if (!host) return;
+    host.textContent = "";
+    const T = state && state.timing;
+    if (!T || T.status === "idle" || !state.record || state.adding) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    const P = PILL[T.status] || PILL.none;
+    let text = P.text;
+    if (T.status === "synced" && T.offsetMs) text += " · " + fmtSigned(T.offsetMs);
+    if (T.status === "none" && T.note === "mismatch") text = "Lyrics don't match LRCLIB · fixed tempo";
+    const pill = el("button", "sync-pill " + P.cls);
+    pill.type = "button";
+    pill.appendChild(el("i", null, P.icon));
+    pill.appendChild(el("span", null, text));
+    pill.setAttribute("aria-label", text);
+    pill.addEventListener("click", () => {
+      if (T.status === "error") startLookup(true);
+      else if (T.status === "synced" || T.status === "warn") setCalibrating(!state.calibrating);
+      else openTiming();
+    });
+    host.appendChild(pill);
+    if (state.calibrating) {
+      const banner = el("div", "sync-fix");
+      banner.appendChild(
+        el("span", null, (T.status === "warn" ? "Timing may be off. " : "") + "Tap the line you hear right now.")
+      );
+      const done = el("button", "songsheet__btn songsheet__btn--sm", T.status === "warn" ? "It's fine" : "Cancel");
+      done.type = "button";
+      done.addEventListener("click", () => setCalibrating(false));
+      banner.appendChild(done);
+      host.appendChild(banner);
+      if (T.hint) host.appendChild(el("p", "sync-fix__hint", T.hint));
     }
   }
 
-  // Collapses a chord/lyric line down to comparable, wording-only text --
-  // used both to tag a point's `text` and to look it back up in a
-  // differently-formatted (but not differently-worded) re-fetch.
-  function normalizeLyricText(s) {
-    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  }
+  /* ---- The Timing sheet (⋯ menu): the details behind the pill ---- */
+  function openTiming() {
+    if (!state || !state.timing) return;
+    const UI = window.GuitarUI;
+    UI.openSheet({
+      title: "Timing",
+      render(body, api) {
+        const T = state.timing;
+        const box = el("div", "timing-sheet");
+        body.appendChild(box);
+        const src = el("p", "t-source");
+        const label = {
+          looking: "Looking up…",
+          synced: "Synced",
+          warn: "Timing may be off",
+          none: T.note === "mismatch" ? "The lyrics don't match" : "Not found at LRCLIB",
+          error: "LRCLIB unreachable",
+          idle: "",
+        }[T.status];
+        src.appendChild(el("b", null, label));
+        const info = el("small");
+        const lrc = T.cand ? { artist: T.cand.artistName, name: T.cand.trackName, duration: T.cand.duration } : T.stored && T.stored.lrc;
+        const st = T.map || (T.stored && T.stored.stats);
+        const parts = [];
+        if (lrc) parts.push("LRCLIB: " + lrc.artist + " – " + lrc.name + " (" + fmtMmss(lrc.duration) + ")");
+        if (T.durMs) parts.push("this recording " + fmtMmss(T.durMs / 1000));
+        if (st) parts.push(Math.round(st.pct * 100) + "% of its lines matched this sheet");
+        if (T.ranked.length) parts.push("version " + (T.index + 1) + " of " + T.ranked.length);
+        info.textContent = parts.join(" · ");
+        src.appendChild(info);
+        box.appendChild(src);
 
-  // Every lyric line's normalized text, in the same flat order/numbering
-  // `line` indices use elsewhere (renderSheet, getJamSnapshot, ...) --
-  // section labels and blank-line breaks don't get an index, only actual
-  // lines do.
-  function flatLyricLineTexts(raw) {
-    const model = parseSheet(raw);
-    const texts = [];
-    model.sections.forEach((section) => {
-      section.lines.forEach((line) => {
-        if (line == null) return;
-        texts.push(normalizeLyricText(line.lyric));
-      });
-    });
-    return texts;
-  }
-
-  // Tapping a line that already has a point just moves it to the current
-  // position -- the same tap is how you both create a point and correct
-  // one you notice has drifted while playing along. `lyricText` is the raw
-  // (un-normalized) text of that exact line, from the render loop that
-  // already has it -- see the click handler in renderSheet().
-  function addSyncPoint(lineIdx, lyricText) {
-    const active = getActivePlayback();
-    if (!active || !state.song) return;
-    const arr = getSyncPoints().filter((p) => p.line !== lineIdx);
-    arr.push({ line: lineIdx, ms: Math.round(active.ms), text: normalizeLyricText(lyricText) });
-    arr.sort((a, b) => a.ms - b.ms);
-    saveSyncPoints(arr);
-    render();
-  }
-
-  function removeSyncPoint(lineIdx) {
-    if (!state.song) return;
-    saveSyncPoints(getSyncPoints().filter((p) => p.line !== lineIdx));
-    render();
-  }
-
-  // Single "clear all" for sync mode -- removing points one at a time by
-  // tapping each time-badge is tedious once there are more than a couple.
-  function clearAllSyncPoints() {
-    if (!state.song) return;
-    saveSyncPoints([]);
-    render();
-  }
-
-  // Called instead of clearLyricsSync() whenever the raw sheet text is
-  // about to change (fetch, paste, or picking a fetched candidate) -- tries
-  // to carry each point over to the new text by its line's own wording
-  // before giving up on it. Only an exact match on the normalized text
-  // counts, and only if it's unique in the new sheet -- a line that
-  // doesn't appear at all, or that the new text repeats more than once
-  // (ambiguous which one it moved to), just drops that one point rather
-  // than keeping a guess. Falls back to clearing everything if fewer than
-  // 2 points survive, same threshold sync needs to do anything with them.
-  function remapOrClearLyricsSync(oldRaw, newRaw) {
-    if (!state || !state.song) return;
-    const points = getSyncPoints();
-    if (!points.length) return;
-    const oldTexts = flatLyricLineTexts(oldRaw);
-    const newTexts = flatLyricLineTexts(newRaw);
-    const remapped = [];
-    points.forEach((p) => {
-      const text = p.text || oldTexts[p.line] || "";
-      if (!text) return;
-      let foundAt = -1;
-      let count = 0;
-      for (let i = 0; i < newTexts.length; i++) {
-        if (newTexts[i] === text) {
-          count++;
-          foundAt = i;
+        if (timingReady()) {
+          box.appendChild(
+            UI.stepperRow("Timing offset", "Lyrics later (+) or earlier (−)", (v) => fmtSigned(v), (d) => {
+              if (d) setOffset(T.offsetMs + d * 250);
+              return T.offsetMs;
+            })
+          );
+          box.appendChild(
+            UI.stepperRow("Highlight ahead", "How early the next line lights up", (v) => (v / 1000).toFixed(1) + " s", (d) => {
+              if (d) {
+                leadMs = Math.max(0, Math.min(3000, leadMs + d * 500));
+                try {
+                  localStorage.setItem(LEAD_KEY, String(leadMs));
+                } catch (e) {
+                  /* just not remembered */
+                }
+              }
+              return leadMs;
+            })
+          );
+          const acts = el("div", "t-actions");
+          const tap = el("button", "songsheet__btn songsheet__btn--sm", "Tap the line you hear");
+          tap.type = "button";
+          tap.addEventListener("click", () => {
+            api.close();
+            setCalibrating(true);
+          });
+          acts.appendChild(tap);
+          if (T.ranked.length > 1) {
+            const next = el("button", "songsheet__btn songsheet__btn--sm", "Try next version");
+            next.type = "button";
+            next.addEventListener("click", () => {
+              api.close();
+              T.touched = false;
+              applyChoice(AS.choose(T.ranked, sheetLineNorms(), (T.index + 1) % T.ranked.length, 1));
+            });
+            acts.appendChild(next);
+          }
+          box.appendChild(acts);
         }
-      }
-      if (count === 1) remapped.push({ line: foundAt, ms: p.ms, text });
+        const acts2 = el("div", "t-actions");
+        const again = el("button", "songsheet__btn songsheet__btn--sm", "Look up again");
+        again.type = "button";
+        again.addEventListener("click", () => {
+          api.close();
+          T.dismissed = false;
+          startLookup(true);
+        });
+        acts2.appendChild(again);
+        box.appendChild(acts2);
+        if (st) {
+          const det = el("details");
+          det.appendChild(el("summary", null, "Details"));
+          const pre = el("pre");
+          pre.textContent = [
+            "anchors: " + T.anchors.length,
+            "LRC lines: " + st.lrcLines + ", sheet coverage: " + Math.round(st.coverage * 100) + "%, jumps back: " + st.jumps,
+            "duration difference: " + (T.durDiff || 0).toFixed(1) + " s",
+            T.stored ? "loaded from this device (no lookup)" : "fresh lookup",
+          ].join("\n");
+          det.appendChild(pre);
+          box.appendChild(det);
+        }
+        box.appendChild(el("p", "t-credit", "Timing data: LRCLIB (lrclib.net). Only times are kept on this device, never the lyrics."));
+      },
     });
-    if (remapped.length >= 2) {
-      remapped.sort((a, b) => a.ms - b.ms);
-      saveSyncPoints(remapped);
-    } else {
-      clearLyricsSync();
-    }
   }
 
   /* ---- Play along --------------------------------------------------------
@@ -1125,10 +1401,6 @@
     const steps = buildChordSteps(shown);
     if (!steps.length) return;
 
-    if (state.syncMode) {
-      state.syncMode = false;
-      state.confirmClearSync = false;
-    }
     if (state.autoscroll.on) {
       state.autoscroll.on = false;
       stopAutoscroll();
@@ -1199,13 +1471,14 @@
 
   /* ---- Transport bar --------------------------------------------------
      The one bar at the bottom of the song screen (#song-transport): a round
-     play/pause for autoscroll, its speed slider, a button for the audio
-     sources (Spotify / YouTube -- js/audiodock.js puts their list and the
-     now-playing bar in the same container) and "Aa" for the display sheet.
-     A tap on play starts or stops scrolling directly, picking synced-vs-
-     fixed mode automatically from whether there's anything to sync to (see
-     hasSyncAvailable()). While a recording is driving the scroll the speed
-     slider gives way to a "Follows the audio" label. ---- */
+     play button, a pace area, a button for the audio sources (Spotify /
+     YouTube -- js/audiodock.js puts their list and the now-playing bar in the
+     same container) and "Aa" for the display sheet.
+     Play normally means "play the song's recording and let the sheet follow
+     it": it starts the recording when none is loaded, and plays or pauses it
+     once there is one. Only when there is no recording, no timing was found,
+     or "Fixed tempo" was picked, play scrolls at a fixed speed instead (the
+     slider in the pace area). ---- */
 
   let transportRow = null;
   let transportAudioBtn = null;
@@ -1240,6 +1513,24 @@
   const ICON_NOTE =
     '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="16.5" cy="16" r="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
 
+  // Which recording the play button starts when none is loaded yet: the
+  // song's Spotify track (or any, once logged in to Spotify), else its
+  // YouTube link, else nothing (the play button then scrolls at a fixed tempo).
+  function autoSource() {
+    const song = state && state.song;
+    if (!song) return null;
+    const sp = window.GuitarSpotify;
+    if (sp && (song.spotifyTrackId || (sp.isLoggedIn && sp.isLoggedIn()))) return "spotify";
+    if (song.backingTrackUrl && window.GuitarBackingTrack) return "backingtrack";
+    return null;
+  }
+
+  function togglePlayback() {
+    const dock = window.GuitarAudioDock;
+    if (dock && dock.isNowPlaying("spotify") && window.GuitarSpotify) window.GuitarSpotify.togglePlay();
+    else if (dock && dock.isNowPlaying("backingtrack") && window.GuitarBackingTrack) window.GuitarBackingTrack.togglePlay();
+  }
+
   function renderTransport() {
     const host = document.getElementById("song-transport");
     if (!host) return;
@@ -1256,22 +1547,35 @@
     }
     transportRow.textContent = "";
 
-    const playing = state.autoscroll.on;
+    const T = state.timing;
+    const drivesAudio = playDrivesAudio(); // play = the recording, the sheet follows it
     const follows = followsAudio();
-    const synced = playing && follows;
-    const play = el("button", "transport__play" + (playing ? " is-on" : "") + (synced ? " is-synced" : ""));
+    const active = getActivePlayback();
+    const playing = drivesAudio ? !!(active && active.playing) : state.autoscroll.on;
+    const play = el("button", "transport__play" + (playing ? " is-on" : "") + (playing && follows ? " is-synced" : ""));
     play.type = "button";
-    play.setAttribute("aria-label", playing ? "Stop scrolling" : "Start scrolling");
+    play.setAttribute("aria-label", playing ? "Pause" : "Play");
     play.setAttribute("aria-pressed", playing ? "true" : "false");
     play.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
     play.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (drivesAudio) {
+        togglePlayback();
+        return;
+      }
+      if (!audioLoaded() && !state.autoscroll.on) {
+        // Nothing loaded yet: start the song's own recording; the sheet follows it.
+        const src = autoSource();
+        if (src) {
+          if (src === "backingtrack") window.GuitarBackingTrack.playWhenReady();
+          if (window.GuitarAudioDock && window.GuitarAudioDock.startSource(src)) return;
+        }
+      }
+      // Fallback: scroll at a fixed tempo.
       if (state.autoscroll.on) {
         state.autoscroll.on = false;
         stopAutoscroll();
       } else {
-        // Follows the recording when there is one with timestamps (unless
-        // "Fixed tempo" was picked), otherwise scrolls at the fixed speed.
         state.autoscroll.on = true;
         startAutoscroll();
       }
@@ -1288,6 +1592,8 @@
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         state.autoscroll.forceManual = forceManual;
+        if (forceManual) state.autoscroll.on = false;
+        stopAutoscroll();
         renderTransport();
       });
       return b;
@@ -1297,10 +1603,28 @@
       head.appendChild(el("span", "transport__pace-label transport__pace-label--synced", "Follows the audio"));
       head.appendChild(modeLink("Fixed tempo", true));
       pace.appendChild(head);
+    } else if (drivesAudio) {
+      // The recording is loaded and its timing is still being looked up.
+      const head = el("div", "transport__pace-head");
+      head.appendChild(el("span", "transport__pace-label", "Looking up timing…"));
+      pace.appendChild(head);
     } else {
       const head = el("div", "transport__pace-head");
-      head.appendChild(el("span", "transport__pace-label", canFollow ? "Fixed tempo" : "Scroll speed"));
+      let label = "Scroll speed";
+      if (canFollow) label = "Fixed tempo";
+      else if (audioLoaded() && T && (T.status === "none" || T.status === "error")) label = "Fixed tempo · no timing";
+      head.appendChild(el("span", "transport__pace-label", label));
       if (canFollow) head.appendChild(modeLink("Follow audio", false));
+      else if (audioLoaded() && T && (T.status === "none" || T.status === "error") && T.note !== "nosheet") {
+        const retry = el("button", "transport__mode", "Try again");
+        retry.type = "button";
+        retry.addEventListener("click", (e) => {
+          e.stopPropagation();
+          T.dismissed = false;
+          startLookup(true);
+        });
+        head.appendChild(retry);
+      }
       const val = el("span", "transport__pace-val", String(state.autoscroll.speed));
       head.appendChild(val);
       pace.appendChild(head);
@@ -1458,53 +1782,40 @@
       fetchError: null,
       candidates: null, // search results awaiting a pick, or null
       confirmRemove: false,
-      syncMode: false,
-      confirmClearSync: false,
+      timing: null, // automatic timing of the recording that is loaded, see updateTimingFor()
+      calibrating: false, // "tap the line you hear" quick fix is armed
+      norms: [],
+      normsRaw: null,
       autoscroll: { on: false, speed: songScrollSpeed(song), forceManual: false },
       playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
     };
     migrateFetchedSheet();
     root.hidden = false;
     render();
+    startLoop();
   }
 
   // Sheets fetched before cleanSheetText() existed still carry their junk --
   // clean them once on open (pasted sheets are the user's own text and are
-  // left alone). Sync timestamps follow their lines to the new positions.
+  // left alone).
   function migrateFetchedSheet() {
     const rec = state.record;
     if (!rec || rec.source === "paste") return;
     const cleaned = cleanSheetText(rec.raw);
     if (cleaned === rec.raw) return;
-    const oldTexts = flatLyricLineTexts(rec.raw);
-    const newTexts = flatLyricLineTexts(cleaned);
     saveSheet(state.inst, state.song.id, { raw: cleaned, source: rec.source, transpose: rec.transpose });
     state.record = loadSheet(state.inst, state.song.id);
-    const points = getSyncPoints();
-    if (!points.length) return;
-    // Cleaning only deletes lines, so the new lines are a subsequence of the
-    // old ones: walk both lists to find where each old line ended up.
-    const oldToNew = new Map();
-    let o = 0;
-    for (let n = 0; n < newTexts.length; n++) {
-      while (o < oldTexts.length && oldTexts[o] !== newTexts[n]) o++;
-      if (o >= oldTexts.length) break;
-      oldToNew.set(o, n);
-      o++;
-    }
-    const remapped = points
-      .filter((p) => oldToNew.has(p.line))
-      .map((p) => ({ line: oldToNew.get(p.line), ms: p.ms, text: p.text }));
-    if (remapped.length >= 2) saveSyncPoints(remapped);
-    else clearLyricsSync();
   }
 
   function close() {
-    stopAutoscroll();
+    stopLoop();
+    applyNowHighlight(-1);
     stopPlayAlong();
     closeInlineChordPopover();
     state = null;
     panel = null;
+    nowEl = null;
+    renderTiming();
     clearChordStrip();
     renderTransport();
     dispatchExpandEvent();
@@ -1541,6 +1852,7 @@
     }
     root.textContent = "";
     panel = null;
+    nowEl = null; // the lines are rebuilt below; the loop re-applies the highlight
     root.classList.toggle("songsheet--nochords", !showChordsPref());
 
     panel = el("div", "songsheet__panel");
@@ -1559,6 +1871,7 @@
       renderSheet();
     }
     renderTransport();
+    renderTiming();
     dispatchExpandEvent();
   }
 
@@ -1743,7 +2056,6 @@
   // with the same text ready to save.
   function applyFetchedSheet(rec) {
     const songId = state.song.id;
-    const oldRaw = state.record ? state.record.raw : "";
     rec = { ...rec, raw: cleanSheetText(rec.raw) };
     saveSheet(state.inst, songId, {
       raw: rec.raw,
@@ -1751,7 +2063,7 @@
       transpose: (state.record && state.record.transpose) | 0,
     });
     state.record = loadSheet(state.inst, songId);
-    remapOrClearLyricsSync(oldRaw, rec.raw); // try to carry timestamps over by line wording first
+    sheetChanged();
     state.adding = false;
     state.candidates = null;
     state.fetchError = null;
@@ -1845,14 +2157,13 @@
         doFetch(url); // a lone link -- fetch and parse that exact page
         return;
       }
-      const oldRaw = state.record ? state.record.raw : "";
-      saveSheet(state.inst, state.song.id, {
+        saveSheet(state.inst, state.song.id, {
         raw,
         source: "paste",
         transpose: (state.record && state.record.transpose) | 0,
       });
       state.record = loadSheet(state.inst, state.song.id);
-      remapOrClearLyricsSync(oldRaw, raw); // try to carry timestamps over by line wording first
+      sheetChanged();
       state.adding = false;
       render();
     });
@@ -1861,24 +2172,6 @@
     form.appendChild(actions);
     panel.appendChild(form);
     setTimeout(() => ta.focus(), 30);
-  }
-
-  // Sync mode, shared by the "..." menu (see getActions) and the "Done
-  // syncing" button in the bar: tapping lines to place timestamps while the
-  // view also scrolls out from under you doesn't work, so autoscroll goes off
-  // going in, and play along (which repurposes the same tap) gives way too.
-  function toggleSyncMode() {
-    if (!state || !state.record) return;
-    state.syncMode = !state.syncMode;
-    state.confirmClearSync = false;
-    if (state.syncMode) {
-      if (state.autoscroll.on) {
-        state.autoscroll.on = false;
-        stopAutoscroll();
-      }
-      stopPlayAlong();
-    }
-    render();
   }
 
   /* ---- Chord strip -------------------------------------------------------
@@ -2001,72 +2294,19 @@
     // (autoscroll, audio, display) or the song's "..." menu (edit, find
     // another sheet), so a plain sheet starts straight with the lyrics.
     renderFetchStatus(panel);
-    if (state.syncMode || state.playAlong.on) {
+    if (state.playAlong.on) {
       const bar = el("div", "songsheet__bar");
       const row = el("div", "songsheet__bar-row");
-      if (state.syncMode) {
-        const activePlaybackForClear = getActivePlayback();
-        const clearableCount = activePlaybackForClear ? getSyncPoints().length : 0;
-        if (clearableCount > 0) {
-          if (state.confirmClearSync) {
-            const confirmWrap = el("div", "songsheet__confirm");
-            confirmWrap.appendChild(
-              el("span", "songsheet__confirm-label", "Clear all " + clearableCount + " timestamps?")
-            );
-            const yes = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear");
-            yes.type = "button";
-            yes.addEventListener("click", () => {
-              clearAllSyncPoints();
-              state.confirmClearSync = false;
-            });
-            const no = el("button", "songsheet__btn songsheet__btn--sm", "Cancel");
-            no.type = "button";
-            no.addEventListener("click", () => {
-              state.confirmClearSync = false;
-              render();
-            });
-            confirmWrap.appendChild(yes);
-            confirmWrap.appendChild(no);
-            row.appendChild(confirmWrap);
-          } else {
-            const clearSync = el("button", "songsheet__btn songsheet__btn--sm songsheet__btn--danger", "Clear timestamps");
-            clearSync.type = "button";
-            clearSync.addEventListener("click", () => {
-              state.confirmClearSync = true;
-              render();
-            });
-            row.appendChild(clearSync);
-          }
-        }
-        const done = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Done syncing");
-        done.type = "button";
-        done.addEventListener("click", toggleSyncMode);
-        row.appendChild(done);
-      } else {
-        const stop = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Stop play along");
-        stop.type = "button";
-        stop.addEventListener("click", () => togglePlayAlong());
-        row.appendChild(stop);
-      }
+      const stop = el("button", "songsheet__btn songsheet__btn--primary songsheet__btn--sm", "Stop play along");
+      stop.type = "button";
+      stop.addEventListener("click", () => togglePlayAlong());
+      row.appendChild(stop);
       bar.appendChild(row);
       panel.appendChild(bar);
     }
 
     const chordSyms = uniqueChords(shown);
     renderChordStrip(model, chordSyms);
-
-    if (state.syncMode) {
-      const activeForHint = getActivePlayback();
-      panel.appendChild(
-        el(
-          "p",
-          "songsheet__sub",
-          activeForHint
-            ? "Tap the line playing right now to link it to this moment in the song. Tap a time label to remove that timestamp."
-            : "Start Spotify or a YouTube backing track with the ♪ button below to be able to set timestamps."
-        )
-      );
-    }
 
     if (state.playAlong.on) {
       panel.appendChild(
@@ -2083,10 +2323,7 @@
 
     /* ---- the sheet body ---- */
     const body = el("div", "songsheet__body");
-    lineWeights = [];
     let flatLineIdx = 0;
-    const activePlayback = state.syncMode ? getActivePlayback() : null;
-    const activeSyncArr = activePlayback ? getSyncPoints() : null;
     // The set of "lineIdx:order" chord occurrences belonging to whichever
     // step play-along is currently on -- see buildChordSteps() and the
     // stepKey lookup in renderLine().
@@ -2104,12 +2341,11 @@
           return;
         }
         const idx = flatLineIdx++;
-        lineWeights[idx] = Math.max(1, (line.lyric || "").trim().length);
         // Play along repurposes a tap on the chord itself for its own line-
         // jump (see the click handler added just below) -- if chord-tap for
         // the diagram popover stayed on too, tapping near a chord to jump
         // would show the diagram instead almost every time.
-        const lineEl = renderLine(line, state.syncMode || state.playAlong.on, idx, playAlongKeys);
+        const lineEl = renderLine(line, state.calibrating || state.playAlong.on, idx, playAlongKeys);
         lineEl.dataset.lineIdx = String(idx);
         if (state.playAlong.on) {
           lineEl.classList.add("ss-line--syncable");
@@ -2118,26 +2354,15 @@
             jumpPlayAlongTo(idx);
           });
         }
-        if (state.syncMode) {
-          lineEl.classList.add("ss-line--syncmode");
-          const existing = activeSyncArr && activeSyncArr.find((p) => p.line === idx);
-          if (activePlayback) {
-            lineEl.classList.add("ss-line--syncable");
-            lineEl.addEventListener("click", (e) => {
-              e.stopPropagation();
-              addSyncPoint(idx, line.lyric);
-            });
-          }
-          if (existing) {
-            const badge = el("span", "ss-line__synctime", formatSyncTime(existing.ms));
-            badge.addEventListener("click", (e) => {
-              e.stopPropagation();
-              removeSyncPoint(idx);
-            });
-            lineEl.appendChild(badge);
-          }
+        if (state.calibrating) {
+          // Quick fix: a tap anywhere on the line says "this is the line I hear".
+          lineEl.classList.add("ss-line--syncable");
+          lineEl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            calibrateTo(idx);
+          });
         }
-        if (!state.syncMode && !state.playAlong.on) {
+        if (!state.calibrating && !state.playAlong.on) {
           // Only the empty space right of the line's own content counts --
           // e.target is the wrap itself there, never one of its .ss-seg
           // children (chord taps already stopPropagation(), and a lyric
@@ -2180,7 +2405,6 @@
   // belongs to within a frame or two (via the scroll-close handler below) --
   // freeze it for as long as the popover is open instead, and pick back up
   // from wherever it's left when the popover closes.
-  let chordPopoverPausedScroll = false;
 
   function closeInlineChordPopover() {
     if (inlineChordAnchor) inlineChordAnchor.classList.remove("is-active");
@@ -2198,12 +2422,6 @@
       if (box) box.removeEventListener("scroll", inlineChordScrollHandler);
       inlineChordScrollHandler = null;
     }
-    if (chordPopoverPausedScroll) {
-      chordPopoverPausedScroll = false;
-      if (state && state.expanded && state.record && !state.adding && state.autoscroll.on) {
-        startAutoscroll();
-      }
-    }
   }
 
   function toggleInlineChordPopover(anchorEl, sym, instrumentOverride) {
@@ -2213,12 +2431,7 @@
     }
     closeInlineChordPopover();
 
-    if (scrollRAF != null) {
-      cancelAnimationFrame(scrollRAF);
-      scrollRAF = null;
-      scrollLastTs = null;
-      chordPopoverPausedScroll = true;
-    }
+    scrollLastTs = null; // the loop leaves the view alone while the popover is open
 
     const card = el("div", "ss-chord-popover");
     document.body.appendChild(card);
@@ -2447,16 +2660,16 @@
       hasSheet: has,
       hasLyrics: !!lyrics,
       hasChords: has && uniqueChords(parseSheet(state.record.raw)).length > 0,
-      syncMode: !!(state && state.syncMode),
+      hasTiming: !!(state && state.timing && state.timing.status !== "idle"),
       playAlongOn: !!(state && state.playAlong.on),
       edit() {
         if (!state) return;
         stopPlayAlong();
-        state.syncMode = false;
+        state.calibrating = false;
         state.adding = true;
         render();
       },
-      toggleSync: toggleSyncMode,
+      openTiming,
       togglePlayAlong() {
         if (state && state.record) togglePlayAlong();
       },

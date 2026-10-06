@@ -12,6 +12,7 @@
 //    transport row.
 (function () {
   let dock = null;
+  const buttons = {};
   let openId = null;
   let openPanelEl = null;
   let openCloseFn = null;
@@ -237,8 +238,18 @@
   }
 
   window.GuitarAudioDock = {
-    registerButton(el) {
+    registerButton(el, id) {
       ensureDock().appendChild(el);
+      if (id) buttons[id] = el;
+    },
+    // Same as tapping that source's button in the sources card -- used by the
+    // song screen's play button to start the song's own recording. Call it
+    // from inside a tap so mobile browsers allow the audio to start.
+    startSource(id) {
+      const b = buttons[id];
+      if (!b || !canShow) return false;
+      b.click();
+      return true;
     },
     togglePanel,
     closePanel,

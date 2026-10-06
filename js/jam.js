@@ -480,6 +480,8 @@
     followerVelocity = 0;
     followerScrollActive = false;
     followerPlayIndex = null;
+    followerNowEl = null;
+    followerDiscrete = false;
   }
 
   function updateScrollFabUI() {
@@ -548,7 +550,27 @@
 
     applyFollowerHighlight(data);
     applyFollowerScroll(data);
+    applyFollowerNow(data);
     applyFollowerMark(data);
+  }
+
+  // While the host follows a recording (mode "timestamps") pos.line is the
+  // line the host has lit -- light the same one on this copy of the sheet.
+  // Any other mode, or the host pausing, clears it.
+  let followerNowEl = null;
+  let followerDiscrete = false; // lines jump one at a time: no speed estimate, quicker catch-up
+  function applyFollowerNow(data) {
+    followerDiscrete = data.mode === "timestamps";
+    let idx = null;
+    if (followerDiscrete && data.pos && data.pos.line != null) idx = Math.round(data.pos.line);
+    const el = idx != null && followerEls ? followerEls.body.querySelector('[data-line-idx="' + idx + '"]') : null;
+    if (el === followerNowEl && (!el || el.classList.contains("ss-line--now"))) return;
+    if (followerNowEl) followerNowEl.classList.remove("ss-line--now");
+    followerNowEl = el;
+    if (el) {
+      void el.offsetWidth; // restart the little flash
+      el.classList.add("ss-line--now");
+    }
   }
 
   // Replays the host's line-mark pulse (js/songsheet.js flashLine(), see
@@ -730,6 +752,7 @@
         followerVelocity = Math.max(-FOLLOWER_MAX_VELOCITY, Math.min(FOLLOWER_MAX_VELOCITY, v));
       }
     }
+    if (data.mode === "timestamps") followerVelocity = 0;
     followerTargetLine = newTarget;
     followerTargetTs = now;
   }
@@ -757,7 +780,7 @@
       // Correction tau is deliberately slower than the old ease-only
       // approach (0.4s) -- the velocity term above already does most of
       // the work of tracking the host, this just keeps it honest.
-      const correctionTau = 0.8;
+      const correctionTau = followerDiscrete ? 0.35 : 0.8;
       const k = 1 - Math.exp(-dt / correctionTau);
       followerRenderedLine += (followerTargetLine - followerRenderedLine) * k;
     }

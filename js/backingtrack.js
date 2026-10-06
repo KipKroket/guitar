@@ -73,6 +73,7 @@
   let ytPlayer = null;
   let currentVideoId = null; // set while a video is loaded -- read by getSourceKey() for lyric sync
   let currentRate = 1;
+  let playOnReady = false; // set by playWhenReady(): start as soon as the player is ready
   let availableRates = DEFAULT_RATES;
   let progressTimer = null;
   function stopProgressTimer() {
@@ -321,6 +322,14 @@
             }
             if (currentRate !== 1) ytPlayer.setPlaybackRate(currentRate);
             tick(); // duration (and 0:00) is available as soon as it's cued, not just once playing starts
+            if (playOnReady) {
+              playOnReady = false;
+              try {
+                ytPlayer.playVideo();
+              } catch (e) {
+                /* the browser may refuse without a fresh tap -- the bar's play button still works */
+              }
+            }
           },
           onPlaybackRateChange: (e) => {
             // Also fires for a rate *we* just requested -- keeps the button
@@ -385,8 +394,25 @@
     document.addEventListener("audiodockpanelchange", (e) => {
       btn.classList.toggle("is-active", e.detail && e.detail.openId === "backingtrack");
     });
-    window.GuitarAudioDock.registerButton(btn);
+    window.GuitarAudioDock.registerButton(btn, "backingtrack");
   }
 
-  window.GuitarBackingTrack = { stop, getPosition, getSourceKey };
+  // Read by js/songsheet.js: length in ms (0 until the video is cued), whether
+  // it is playing, a play/pause toggle for the song screen's play button, and
+  // "start as soon as it is ready" for when that button cues the video itself.
+  function getDuration() {
+    return ytPlayer && ytPlayer.getDuration ? (ytPlayer.getDuration() || 0) * 1000 : 0;
+  }
+  function isPlaying() {
+    return !!(ytPlayer && ytPlayer.getPlayerState && window.YT && ytPlayer.getPlayerState() === window.YT.PlayerState.PLAYING);
+  }
+  function togglePlay() {
+    if (!ytPlayer || !ytPlayer.getPlayerState) return;
+    if (isPlaying()) ytPlayer.pauseVideo();
+    else ytPlayer.playVideo();
+  }
+  function playWhenReady() {
+    playOnReady = true;
+  }
+  window.GuitarBackingTrack = { stop, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, playWhenReady };
 })();

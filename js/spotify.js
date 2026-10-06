@@ -686,8 +686,21 @@
     document.addEventListener("audiodockpanelchange", (e) => {
       btn.classList.toggle("is-active", e.detail && e.detail.openId === "spotify");
     });
-    window.GuitarAudioDock.registerButton(btn);
+    window.GuitarAudioDock.registerButton(btn, "spotify");
   }
 
-  window.GuitarSpotify = { stop, pause, getPosition, getSourceKey };
+  // Read by js/songsheet.js: the length of the loaded track (ms, 0 until the
+  // first state arrives), whether it is playing, and a play/pause toggle for
+  // the song screen's play button.
+  function getDuration() {
+    if (!lastState) return 0;
+    return lastState.duration || (lastState.track_window && lastState.track_window.current_track && lastState.track_window.current_track.duration_ms) || 0;
+  }
+  function isPlaying() {
+    return !!(lastState && !lastState.paused);
+  }
+  function togglePlay() {
+    if (player) player.togglePlay().catch(() => {});
+  }
+  window.GuitarSpotify = { stop, pause, getPosition, getSourceKey, getDuration, isPlaying, togglePlay, isLoggedIn };
 })();

@@ -128,6 +128,34 @@
   let library = loadSongs(currentInstrument());
   let tombstones = loadTombs(currentInstrument());
 
+  // Lyric timing is automatic now (js/autosync.js). The timestamps tapped in
+  // by hand (song.lyricsSync) are dropped from every song -- they also carried
+  // the text of each tagged lyric line into the account, which should not be
+  // there. Newer updatedAt makes the removal win over an older synced copy.
+  function purgeLyricsSync() {
+    let changed = false;
+    INSTRUMENTS.forEach((inst) => {
+      const songs = loadSongs(inst);
+      let any = false;
+      songs.forEach((s) => {
+        if ("lyricsSync" in s) {
+          delete s.lyricsSync;
+          s.updatedAt = Date.now();
+          any = true;
+        }
+      });
+      if (any) {
+        persist(inst, songs, null);
+        changed = true;
+      }
+    });
+    if (changed) {
+      library = loadSongs(currentInstrument());
+      document.dispatchEvent(new CustomEvent("librarychange"));
+    }
+  }
+  purgeLyricsSync();
+
   // Persist the active instrument's state and let the (optional) cloud-sync
   // layer know something changed.
   function commit() {
@@ -152,20 +180,6 @@
       if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
       return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
     });
-  }
-
-  // Whether js/songsheet.js has saved lyric-sync timestamps for this song --
-  // used to badge the row in the library list, see renderSongRow below.
-  // `lyricsSync` is a flat array of points these days (one list per song,
-  // not per recording); a plain object here means it hasn't been opened
-  // since the old Build 31-41 per-recording shape, which songsheet.js's own
-  // getSyncPoints() migrates in place the first time the song's sheet is
-  // opened -- until then, this still has to read the old shape directly.
-  function songHasTimestamps(song) {
-    const sync = song && song.lyricsSync;
-    if (Array.isArray(sync)) return sync.length > 0;
-    if (!sync || typeof sync !== "object") return false;
-    return Object.keys(sync).some((k) => Array.isArray(sync[k]) && sync[k].length > 0);
   }
 
   /* ---------- Rendering: shared song row ---------- */
@@ -208,15 +222,6 @@
       li.appendChild(learningBadge);
     }
 
-    if (withFavStar && songHasTimestamps(song)) {
-      const syncedBadge = document.createElement("span");
-      syncedBadge.className = "song-item__synced";
-      syncedBadge.setAttribute("aria-label", "Lyrics timed to playback");
-      syncedBadge.innerHTML =
-        '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 16V6l8-1.5v10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7" cy="16" r="2.3" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="15" cy="14.5" r="2.3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2 11c1.5-1 2.5-1 4 0M2 14c1.5-1 2.5-1 4 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
-      li.appendChild(syncedBadge);
-    }
-
     // Favorites are only a marker here; the star is toggled on the song's own
     // screen, so a stray tap in the list can never change it.
     if (withFavStar && song.favorite) {
@@ -240,9 +245,8 @@
     all: () => true,
     favorites: (s) => !!s.favorite,
     learning: (s) => !!s.learning,
-    synced: (s) => songHasTimestamps(s),
   };
-  const FILTER_NAMES = { favorites: "favorites", learning: "songs you're learning", synced: "synced songs" };
+  const FILTER_NAMES = { favorites: "favorites", learning: "songs you're learning" };
 
   function renderLibraryList() {
     const sorted = sortedLibrary();
@@ -919,10 +923,10 @@
       { divider: true, hidden: !(a && a.hasSheet) },
       { label: "Edit sheet", icon: ICONS.edit, hidden: !(a && a.hasSheet), onClick: () => a.edit() },
       {
-        label: a && a.syncMode ? "Done syncing" : "Sync lyrics to track",
+        label: "Timing…",
         icon: ICONS.sync,
-        hidden: !(a && a.hasLyrics),
-        onClick: () => a.toggleSync(),
+        hidden: !(a && a.hasTiming),
+        onClick: () => a.openTiming(),
       },
       {
         label: a && a.playAlongOn ? "Stop play along" : "Play along",
@@ -1054,6 +1058,7 @@
       persist(inst, merged[inst].songs, merged[inst].tombstones);
     });
     const cur = currentInstrument();
+    purgeLyricsSync();
     library = loadSongs(cur);
     tombstones = loadTombs(cur);
     renderLibraryList();

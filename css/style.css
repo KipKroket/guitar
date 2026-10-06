@@ -699,19 +699,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
 }
 .song-item__learning svg path:last-child { fill: currentColor; }
 
-/* Small "note in motion" icon shown when a song has lyric timestamps saved
-   (js/songsheet.js sync mode) -- --good, same color the synced autoscroll
-   FAB and "Synced with playback" status use elsewhere for this feature. */
-.song-item__synced {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  color: var(--good);
-}
-
 .search-status {
   font-size: 0.85rem;
   color: var(--ink-soft);
@@ -1427,11 +1414,9 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   line-height: 1.35;
   margin: 0.15rem 0;
 }
-/* Sync mode -- tap a line to record a timestamp against it (js/songsheet.js
-   addSyncPoint). Only lines get the pointer/highlight; the tap area is the
-   whole row so it's forgiving on a phone. Play along reuses the same
-   .ss-line--syncable affordance for its own tap-to-jump override. */
-.ss-line--syncmode { border-radius: 6px; }
+/* Tappable lines: the "tap the line you hear" quick fix (js/songsheet.js
+   calibrateTo) and play along's own tap-to-jump override. The tap area is
+   the whole row so it's forgiving on a phone. */
 .ss-line--syncable {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -1448,7 +1433,7 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
    is what makes the fade-out smooth. MARK_FADE_MS in songsheet.js must
    match the duration below. */
 .ss-line--marked {
-  /* No padding/margin change here (unlike .ss-line--syncmode) -- this
+  /* No padding/margin change here -- this
      class toggles on/off during normal viewing, and shifting the box
      model would visibly nudge neighbouring lines instead of just
      highlighting this one. */
@@ -1456,19 +1441,6 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   border-radius: 6px;
 }
 .ss-line--mark-fade { transition: background-color 0.7s ease; }
-.ss-line__synctime {
-  align-self: center;
-  margin-left: 0.6rem;
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--bg);
-  background: var(--good);
-  border-radius: 999px;
-  padding: 0.15rem 0.55rem;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
 .ss-seg {
   display: inline-flex;
   flex-direction: column;
@@ -2792,3 +2764,91 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
   -webkit-tap-highlight-color: transparent;
 }
 .settings-update[disabled] { opacity: 0.6; cursor: default; text-decoration: none; }
+
+/* ---------- Automatic lyric timing (js/songsheet.js, js/autosync.js) ---------- */
+/* The line that is about to be sung / being sung. Shadow instead of padding so
+   lighting a line never nudges its neighbours. Also used on a jam follower's
+   copy of the sheet (js/jam.js). */
+.ss-line--now {
+  background: color-mix(in srgb, var(--amber) 17%, transparent);
+  box-shadow: 0 0 0 0.3rem color-mix(in srgb, var(--amber) 17%, transparent);
+  border-radius: 8px;
+  animation: ss-now-flash 0.9s ease-out;
+}
+@keyframes ss-now-flash {
+  from {
+    background-color: color-mix(in srgb, var(--amber) 45%, transparent);
+    box-shadow: 0 0 0 0.3rem color-mix(in srgb, var(--amber) 45%, transparent);
+  }
+}
+.detail-sub { flex-wrap: wrap; row-gap: 0.4rem; }
+.detail-timing {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+.detail-timing[hidden] { display: none; }
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem 0.3rem 0.35rem;
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--good) 24%, var(--bg));
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sync-pill i {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 0.74rem;
+  background: var(--good);
+  color: var(--bg);
+}
+.sync-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-pill.is-looking { background: var(--surface-raised); }
+.sync-pill.is-looking i {
+  background: none;
+  box-shadow: inset 0 0 0 2px var(--line);
+  border-top: 2px solid var(--amber);
+  animation: sync-spin 0.9s linear infinite;
+}
+@keyframes sync-spin { to { transform: rotate(360deg); } }
+.sync-pill.is-warn { background: color-mix(in srgb, var(--caution) 34%, var(--bg)); }
+.sync-pill.is-warn i { background: var(--caution); color: #2b1b0a; }
+.sync-pill.is-none, .sync-pill.is-error { background: color-mix(in srgb, var(--ember) 18%, var(--bg)); }
+.sync-pill.is-none i, .sync-pill.is-error i { background: var(--ember); color: var(--bg); }
+.sync-fix {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: center;
+}
+.sync-fix__hint { margin: 0; font-size: 0.78rem; color: var(--ink-soft); }
+.timing-sheet { display: grid; gap: 0.2rem; }
+.timing-sheet .t-source { font-size: 0.88rem; line-height: 1.45; margin: 0 0 0.4rem; }
+.timing-sheet .t-source small { display: block; color: var(--ink-soft); }
+.timing-sheet .t-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+.timing-sheet details { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.5rem; }
+.timing-sheet details pre { white-space: pre-wrap; margin: 0.4rem 0 0; font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; }
+.timing-sheet .t-credit { font-size: 0.74rem; color: var(--ink-soft); margin: 0.4rem 0 0; }
+@media (prefers-reduced-motion: reduce) {
+  .ss-line--now, .sync-pill.is-looking i { animation: none; }
+}
