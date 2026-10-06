@@ -61,14 +61,24 @@
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || !data.access_token) {
-      throw new Error((data && data.error_description) || "Spotify login failed.");
+      const err = new Error((data && data.error_description) || "Spotify login failed.");
+      // Only a 400/401 from Spotify itself means the refresh token is
+      // really dead; a 5xx or a body-less response is just a hiccup.
+      err.permanent = res.status === 400 || res.status === 401;
+      throw err;
     }
     return data;
   }
 
   // Refreshes ~1 minute ahead of expiry; returns null (and drops the stored
-  // auth) if there's nothing to refresh with, or the refresh itself fails --
-  // a revoked/expired session, which just means logging in again.
+  // auth) only if there's nothing to refresh with, or Spotify itself rejects
+  // the refresh token -- a revoked/expired session, which just means logging
+  // in again. The SDK's own getOAuthToken and playSong() both call this, often
+  // at the same moment: two parallel refreshes with the same (possibly
+  // rotating) refresh token made the second one fail and log the user out,
+  // so concurrent callers now share a single request. A network hiccup keeps
+  // the stored session instead of wiping it.
+  let refreshPromise = null;
   async function getValidToken() {
     const auth = loadAuth();
     if (!auth) return null;
@@ -77,17 +87,24 @@
       clearAuth();
       return null;
     }
-    try {
-      const data = await tokenRequest({
-        grant_type: "refresh_token",
-        refresh_token: auth.refresh_token,
-        client_id: CLIENT_ID,
-      });
-      return saveAuth(data, auth).access_token;
-    } catch (e) {
-      clearAuth();
-      return null;
+    if (!refreshPromise) {
+      refreshPromise = (async () => {
+        try {
+          const data = await tokenRequest({
+            grant_type: "refresh_token",
+            refresh_token: auth.refresh_token,
+            client_id: CLIENT_ID,
+          });
+          return saveAuth(data, auth).access_token;
+        } catch (e) {
+          if (e && e.permanent) clearAuth();
+          return null;
+        } finally {
+          refreshPromise = null;
+        }
+      })();
     }
+    return refreshPromise;
   }
 
   async function login() {
@@ -292,7 +309,7 @@
       const timer = setTimeout(() => {
         deviceWaiters = deviceWaiters.filter((w) => w !== onReady);
         reject(new Error("Couldn't reconnect to Spotify."));
-      }, 8000);
+      }, 3000);
       function onReady(id) {
         clearTimeout(timer);
         resolve(id);
@@ -342,48 +359,81 @@
     return deviceId;
   }
 
-  async function playSong(song) {
-    if (!(await getValidToken())) throw new Error("not-logged-in");
-    // Whatever the previous song left behind must not be mistaken for this
-    // one's state (see the verification below and renderState()).
-    lastState = null;
-    let device;
-    try {
-      device = await readyDevice();
-    } catch (err) {
-      // One clean retry on a brand-new player before giving up.
-      resetPlayer();
-      device = await readyDevice();
-    }
-    const trackId = await resolveTrackId(song);
-    if (!trackId) throw new Error("Couldn't find this song on Spotify.");
-    currentTrackId = trackId;
+  // One round of "get this track playing on `device`". Returns true once the
+  // player really has the track loaded, false if it never did (or the device
+  // turned out to be dead), so the caller can retry on a fresh player.
+  async function tryPlay(device, trackId) {
+    // Explicitly make our device the active one first. After the previous
+    // song was paused for a while Spotify no longer treats it as active, and
+    // a bare /play then either does nothing or lands on another device.
+    const t0 = await getValidToken();
+    if (!t0) throw new Error("not-logged-in");
+    await fetch("https://api.spotify.com/v1/me/player", {
+      method: "PUT",
+      headers: { Authorization: "Bearer " + t0, "Content-Type": "application/json" },
+      body: JSON.stringify({ device_ids: [device], play: false }),
+    }).catch(() => {});
+    await sleep(300);
 
     // Spotify's /play can return 204 while the device keeps (or resumes)
     // the previous track -- so after each request, check what the player
     // actually loaded and re-send if it's not this song.
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (currentTrackId !== trackId) return true; // user already moved on to another song
       const token = await getValidToken();
       if (!token) throw new Error("not-logged-in");
       const res = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + device, {
         method: "PUT",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ uris: ["spotify:track:" + trackId] }),
-      });
-      if (!res.ok && res.status !== 204) {
+      }).catch(() => null);
+      if (res && !res.ok && res.status !== 204) {
         // A 404 here means Spotify no longer recognises this device_id at
-        // all -- drop the player so the next attempt reconnects from scratch
+        // all -- drop the player so the next round reconnects from scratch
         // instead of repeating the same failing request against a dead id.
-        if (res.status === 404) resetPlayer();
-        throw new Error("Playback failed.");
+        if (res.status === 404) {
+          resetPlayer();
+          return false;
+        }
+        if (res.status === 401 || res.status === 403) throw new Error("Playback failed.");
       }
       await sleep(1200);
-      if (currentTrackId !== trackId) return; // user already moved on to another song
+      if (currentTrackId !== trackId) return true;
       const st = player && (await player.getCurrentState().catch(() => null));
       const cur = st && st.track_window && st.track_window.current_track;
-      if (!cur) continue;
-      if (cur.id === trackId || (cur.linked_from && cur.linked_from.id === trackId)) return;
+      if (cur && (cur.id === trackId || (cur.linked_from && cur.linked_from.id === trackId))) return true;
+      await sleep(500);
     }
+    return false;
+  }
+
+  async function playSong(song) {
+    if (!(await getValidToken())) throw new Error("not-logged-in");
+    const trackId = await resolveTrackId(song);
+    if (!trackId) throw new Error("Couldn't find this song on Spotify.");
+    currentTrackId = trackId;
+    // Whatever the previous song left behind must not be mistaken for this
+    // one's state (see renderState()).
+    lastState = null;
+    // Round 0 reuses the existing player; if that doesn't get the track
+    // playing (stale device after an idle pause, a connection that quietly
+    // died, ...) round 1 throws it away and starts a brand-new one. The old
+    // code gave up silently after its attempts, leaving the bar stuck on
+    // "Connecting…" -- now it ends in a real error instead.
+    for (let round = 0; round < 2; round++) {
+      if (round > 0) resetPlayer();
+      let device;
+      try {
+        device = await readyDevice();
+      } catch (err) {
+        if (round > 0) throw err;
+        resetPlayer();
+        continue;
+      }
+      if (await tryPlay(device, trackId)) return;
+      if (currentTrackId !== trackId) return;
+    }
+    throw new Error("Spotify didn't start.");
   }
 
   function pause() {
@@ -616,6 +666,13 @@
       }
       onStateChange = null;
       if (window.GuitarBackingTrack) window.GuitarBackingTrack.stop();
+      // Must happen inside this tap: it's what lets mobile browsers start
+      // (or resume) audio from the SDK's player later on, outside a gesture.
+      try {
+        if (player && player.activateElement) Promise.resolve(player.activateElement()).catch(() => {});
+      } catch (e) {
+        /* best effort */
+      }
       if (!isLoggedIn()) {
         window.GuitarAudioDock.togglePanel("spotify", () => buildLoginPanel(ctx.song), null);
         return;

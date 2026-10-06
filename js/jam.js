@@ -74,6 +74,16 @@
   // identity (switching that would also flip the tuner, nav colours, etc.
   // just to read a chord while jamming). Starts matching this follower's own
   // app so the common case -- a piano player joining -- needs no tap at all.
+  // Lyrics-only reading mode for followers who don't want the chords in
+  // the way -- hides the chord chips and the chords above the lyrics.
+  // Remembered across jams on this device.
+  const HIDE_CHORDS_KEY = "guitar-jam-hide-chords";
+  let followerHideChords = false;
+  try {
+    followerHideChords = localStorage.getItem(HIDE_CHORDS_KEY) === "1";
+  } catch (e) {
+    /* storage blocked -- default to showing chords */
+  }
   let followerInstrument = (window.GuitarApp && window.GuitarApp.getInstrument()) || document.body.dataset.instrument || "guitar";
 
   function el(tag, className, text) {
@@ -390,6 +400,31 @@
       }
     });
     followRow.appendChild(instrumentToggle);
+
+    const chordSwitch = el("button", "jam-view__chord-switch");
+    chordSwitch.type = "button";
+    chordSwitch.setAttribute("role", "switch");
+    chordSwitch.innerHTML =
+      '<span class="jam-view__chord-switch-label">Chords</span>' +
+      '<span class="jam-view__chord-switch-track" aria-hidden="true"><span class="jam-view__chord-switch-thumb"></span></span>';
+    chordSwitch.addEventListener("click", () => {
+      followerHideChords = !followerHideChords;
+      try {
+        localStorage.setItem(HIDE_CHORDS_KEY, followerHideChords ? "1" : "0");
+      } catch (e) {
+        /* best effort */
+      }
+      updateChordSwitchUI();
+      if (followerShown) {
+        const SS = window.GuitarSongSheet;
+        const scrollTop = followerEls.body.scrollTop;
+        renderFollowerChips(SS, followerShown);
+        renderFollowerBody(SS, followerShown);
+        followerEls.body.scrollTop = scrollTop;
+        if (followerLastData) applyFollowerHighlight(followerLastData);
+      }
+    });
+    followRow.appendChild(chordSwitch);
     root.appendChild(followRow);
 
     const waiting = el("p", "jam-view__waiting", "Waiting for the host to open a song…");
@@ -417,9 +452,10 @@
     });
     root.appendChild(scrollFab);
 
-    followerEls = { root, art, title, artist, instrumentToggle, waiting, chipsWrap, body, scrollFab };
+    followerEls = { root, art, title, artist, instrumentToggle, chordSwitch, waiting, chipsWrap, body, scrollFab };
     updateScrollFabUI();
     updateInstrumentToggleUI();
+    updateChordSwitchUI();
     if (followerScrollRAF == null) followerScrollRAF = requestAnimationFrame(followerScrollFrame);
   }
 
@@ -451,6 +487,11 @@
     const following = autoFollow && followerScrollActive;
     followerEls.scrollFab.classList.toggle("is-following", following);
     followerEls.scrollFab.setAttribute("aria-pressed", following ? "true" : "false");
+  }
+
+  function updateChordSwitchUI() {
+    if (!followerEls) return;
+    followerEls.chordSwitch.setAttribute("aria-checked", followerHideChords ? "false" : "true");
   }
 
   function updateInstrumentToggleUI() {
@@ -522,6 +563,7 @@
 
   function renderFollowerChips(SS, shown) {
     followerEls.chipsWrap.textContent = "";
+    if (followerHideChords) return;
     const syms = SS.uniqueChords(shown);
     if (!syms.length) return;
     const row = el("div", "songsheet__chips");
@@ -555,6 +597,23 @@
     followerEls.chipsWrap.appendChild(card);
   }
 
+  // Same ss-line wrapper as renderLine() (so line marks, scroll mapping and
+  // styling keep working) but with the lyric as one wrapping piece and no
+  // chords. A chord-only line (intro / instrumental bars) collapses to a
+  // thin spacer instead of an empty row.
+  function renderLyricOnlyLine(line) {
+    const wrap = el("div", "ss-line ss-line--lyriconly");
+    const lyric = (line.lyric || "").trim();
+    if (!lyric) {
+      wrap.classList.add("ss-line--lyriconly-empty");
+      return wrap;
+    }
+    const seg = el("span", "ss-seg");
+    seg.appendChild(el("span", "ss-seg__lyric", lyric));
+    wrap.appendChild(seg);
+    return wrap;
+  }
+
   function renderFollowerBody(SS, shown) {
     followerEls.body.textContent = "";
     let flatLineIdx = 0;
@@ -567,7 +626,7 @@
           return;
         }
         const idx = flatLineIdx++;
-        const lineEl = SS.renderLine(line, false, idx, null, followerInstrument);
+        const lineEl = followerHideChords ? renderLyricOnlyLine(line) : SS.renderLine(line, false, idx, null, followerInstrument);
         lineEl.dataset.lineIdx = String(idx);
         sec.appendChild(lineEl);
       });
