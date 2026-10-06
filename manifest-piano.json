@@ -5,8 +5,8 @@
   "start_url": "./index.html?instrument=piano",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#14171C",
-  "theme_color": "#14171C",
+  "background_color": "#0B2F33",
+  "theme_color": "#0B2F33",
   "orientation": "portrait",
   "icons": [
     { "src": "icons/icon-piano-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
