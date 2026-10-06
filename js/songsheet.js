@@ -499,6 +499,24 @@
       /* quota -- fine to just not remember it */
     }
   }
+  // The fixed-tempo speed is remembered per song (on the song itself, so it
+  // rides along with backup and sync like the backing-track link does); the
+  // last speed used anywhere is only the starting point for a song that has
+  // none yet.
+  function songScrollSpeed(song) {
+    const v = song && song.scrollSpeed;
+    return Number.isInteger(v) && v >= 1 && v <= 10 ? v : loadScrollSpeed();
+  }
+  function persistScrollSpeed() {
+    if (!state) return;
+    const level = state.autoscroll.speed;
+    saveScrollSpeed(level);
+    state.song.scrollSpeed = level;
+    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
+      window.GuitarLibrary.setSongField(state.song.id, { scrollSpeed: level });
+    }
+  }
+
   function levelToPxPerSec(level) {
     return level * 8; // 8..80 px/s
   }
@@ -905,13 +923,23 @@
     return null;
   }
 
-  // Whether the FAB should offer the "fixed tempo" override at all -- i.e.
-  // whether synced autoscroll is even possible right now, regardless of
-  // whether the override is currently forcing manual mode.
+  // Whether a recording (Spotify / YouTube) is loaded in the audio bar. It
+  // counts from the moment it is cued, not only once it has a playback
+  // position, so the scroll mode can switch the instant a track is loaded.
+  function audioLoaded() {
+    const dock = window.GuitarAudioDock;
+    return !!(dock && (dock.isNowPlaying("spotify") || dock.isNowPlaying("backingtrack")));
+  }
+
+  // Whether this song could follow the audio at all: a recording is loaded
+  // and the song has timestamps to follow. The user can still choose a fixed
+  // tempo instead (forceManual).
   function hasSyncAvailable() {
-    const active = getActivePlayback();
-    if (!active || !state || !state.song) return false;
-    return getSyncPoints().length >= 2;
+    return !!(state && state.song && audioLoaded() && getSyncPoints().length >= 2);
+  }
+
+  function followsAudio() {
+    return hasSyncAvailable() && !state.autoscroll.forceManual;
   }
 
   // What autoscroll should actually do this frame: null falls back to the
@@ -1229,7 +1257,8 @@
     transportRow.textContent = "";
 
     const playing = state.autoscroll.on;
-    const synced = playing && effectiveSyncedMode();
+    const follows = followsAudio();
+    const synced = playing && follows;
     const play = el("button", "transport__play" + (playing ? " is-on" : "") + (synced ? " is-synced" : ""));
     play.type = "button";
     play.setAttribute("aria-label", playing ? "Stop scrolling" : "Start scrolling");
@@ -1241,9 +1270,8 @@
         state.autoscroll.on = false;
         stopAutoscroll();
       } else {
-        // Follow the recording when there's something to follow, otherwise
-        // fall back to a fixed tempo.
-        state.autoscroll.forceManual = !hasSyncAvailable();
+        // Follows the recording when there is one with timestamps (unless
+        // "Fixed tempo" was picked), otherwise scrolls at the fixed speed.
         state.autoscroll.on = true;
         startAutoscroll();
       }
@@ -1252,11 +1280,27 @@
     transportRow.appendChild(play);
 
     const pace = el("div", "transport__pace");
-    if (synced) {
-      pace.appendChild(el("span", "transport__pace-label transport__pace-label--synced", "Follows the audio"));
+    const canFollow = hasSyncAvailable();
+    // Small text switch between the two modes, only when both are possible.
+    const modeLink = (label, forceManual) => {
+      const b = el("button", "transport__mode", label);
+      b.type = "button";
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.autoscroll.forceManual = forceManual;
+        renderTransport();
+      });
+      return b;
+    };
+    if (follows) {
+      const head = el("div", "transport__pace-head");
+      head.appendChild(el("span", "transport__pace-label transport__pace-label--synced", "Follows the audio"));
+      head.appendChild(modeLink("Fixed tempo", true));
+      pace.appendChild(head);
     } else {
       const head = el("div", "transport__pace-head");
-      head.appendChild(el("span", "transport__pace-label", "Scroll speed"));
+      head.appendChild(el("span", "transport__pace-label", canFollow ? "Fixed tempo" : "Scroll speed"));
+      if (canFollow) head.appendChild(modeLink("Follow audio", false));
       const val = el("span", "transport__pace-val", String(state.autoscroll.speed));
       head.appendChild(val);
       pace.appendChild(head);
@@ -1271,7 +1315,7 @@
         state.autoscroll.speed = parseInt(speed.value, 10);
         val.textContent = speed.value;
       });
-      speed.addEventListener("change", () => saveScrollSpeed(state.autoscroll.speed));
+      speed.addEventListener("change", persistScrollSpeed);
       pace.appendChild(speed);
     }
     transportRow.appendChild(pace);
@@ -1304,7 +1348,9 @@
     transportAudioBtn.classList.toggle("is-on", on);
     transportAudioBtn.setAttribute("aria-pressed", on ? "true" : "false");
   }
-  document.addEventListener("audiodockpanelchange", syncAudioButton);
+  // A recording being loaded (or dropped) can change what the scroll follows,
+  // so the whole bar is redrawn, not just the ♪ button.
+  document.addEventListener("audiodockpanelchange", () => renderTransport());
 
   /* ---- Display sheet: key, chords on/off, scroll mode --------------------
      Everything that changes how the sheet reads, in one place instead of
@@ -1359,7 +1405,7 @@
         }
         const wrap = el("label", "ui-row ui-row--range");
         const top = el("div", "ui-row__text");
-        top.appendChild(el("span", null, "Fixed tempo speed"));
+        top.appendChild(el("span", null, "Fixed tempo speed (this song)"));
         const val = el("b", null, String(state.autoscroll.speed));
         top.appendChild(val);
         wrap.appendChild(top);
@@ -1374,7 +1420,7 @@
           val.textContent = speed.value;
         });
         speed.addEventListener("change", () => {
-          saveScrollSpeed(state.autoscroll.speed);
+          persistScrollSpeed();
           renderTransport();
         });
         wrap.appendChild(speed);
@@ -1414,7 +1460,7 @@
       confirmRemove: false,
       syncMode: false,
       confirmClearSync: false,
-      autoscroll: { on: false, speed: loadScrollSpeed(), forceManual: false },
+      autoscroll: { on: false, speed: songScrollSpeed(song), forceManual: false },
       playAlong: { on: false, index: 0, steps: null, detector: null, error: null },
     };
     migrateFetchedSheet();

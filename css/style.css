@@ -2391,7 +2391,8 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 .songsheet__body { margin-top: 0.4rem; padding-bottom: min(60vh, 22rem); }
 .detail-scroll .ss-seg__lyric { font-size: 1.04rem; }
 .detail-scroll .ss-seg__chord { font-size: 0.82rem; }
-.songsheet--nochords .ss-seg__chord { display: none; }
+/* Hidden, not removed: the lyrics keep exactly the spacing they have with chords on. */
+.songsheet--nochords .ss-seg__chord { visibility: hidden; }
 .songsheet__bar {
   position: sticky;
   top: -0.5rem;
@@ -2437,9 +2438,24 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 .transport__play.is-on.is-synced { background: var(--good); box-shadow: 0 3px 0 color-mix(in srgb, var(--good) 60%, #000); }
 .transport__play:active { transform: translateY(1px); }
 .transport__pace { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
-.transport__pace-head { display: flex; justify-content: space-between; font-size: 0.74rem; color: var(--ink-soft); }
+.transport__pace-head { white-space: nowrap; gap: 0.4rem; display: flex; justify-content: space-between; font-size: 0.74rem; color: var(--ink-soft); }
 .transport__pace-val { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
 .transport__pace-label--synced { font-size: 0.82rem; font-weight: 600; color: var(--good); }
+.transport__mode {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--amber-deep);
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.transport__pace-head .transport__mode + .transport__pace-val { margin-left: 0.6rem; }
 .transport__slider { width: 100%; margin: 0; accent-color: var(--amber); }
 .transport__btn {
   flex: none;
