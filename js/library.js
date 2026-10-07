@@ -408,12 +408,23 @@
   let searchAbortController = null;
   let searchDebounceTimer = null;
 
-  function openSearch(prefill) {
+  // Request mode (a jam follower asking the host for a song, js/jam.js): the
+  // same catalogue search, but each row gets a Request button instead of
+  // opening the song, and there's no "add a song that isn't listed".
+  // `request` = { send(song) -> Promise, isSent(song) -> bool } or null.
+  let searchRequest = null;
+  const SEARCH_PLACEHOLDER = searchInput.placeholder;
+
+  function openSearch(prefill, opts) {
+    searchRequest = (opts && opts.request) || null;
+    searchOverlay.classList.toggle("overlay--request", Boolean(searchRequest));
+    searchInput.placeholder = searchRequest ? "Search a song to request…" : SEARCH_PLACEHOLDER;
     searchOverlay.hidden = false;
     searchResultsEl.innerHTML = "";
     searchStatusEl.textContent = "";
     searchInput.value = typeof prefill === "string" ? prefill : "";
     resetCustomForm();
+    if (searchRequest) customToggle.hidden = true;
     setTimeout(() => searchInput.focus(), 50);
     if (searchInput.value.trim().length >= 2) runSearch(searchInput.value.trim());
   }
@@ -421,6 +432,36 @@
   function closeSearch() {
     searchOverlay.hidden = true;
     if (searchAbortController) searchAbortController.abort();
+  }
+
+  // The jam ended / was left while the request search was open.
+  function closeRequestSearch() {
+    if (searchRequest && !searchOverlay.hidden) closeSearch();
+  }
+
+  function renderRequestRow(song) {
+    const li = renderSongRow(song, { withFavStar: false, onOpen: () => {} });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "song-item__request";
+    const setState = (state) => {
+      btn.dataset.state = state;
+      btn.disabled = state === "sending" || state === "sent";
+      btn.textContent = { idle: "Request", sending: "Sending…", sent: "Requested ✓", error: "Retry" }[state];
+    };
+    setState(searchRequest.isSent(song) ? "sent" : "idle");
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      setState("sending");
+      try {
+        await searchRequest.send(song);
+        setState("sent");
+      } catch (err) {
+        setState("error");
+      }
+    });
+    li.appendChild(btn);
+    return li;
   }
 
   /* ---------- Custom song (not in the catalogue) ---------- */
@@ -543,7 +584,9 @@
       }
       searchStatusEl.textContent = "";
       results.forEach((song) => {
-        searchResultsEl.appendChild(renderSongRow(song, { withFavStar: false }));
+        searchResultsEl.appendChild(
+          searchRequest ? renderRequestRow(song) : renderSongRow(song, { withFavStar: false })
+        );
       });
     } catch (err) {
       if (err.name === "AbortError") return; // superseded by a newer search
@@ -779,7 +822,8 @@
     closeSearch();
     // js/jam.js listens for this to move the "jam active" pill onto the
     // song's info page (and back off it on close).
-    document.dispatchEvent(new CustomEvent("songdetailchange", { detail: { open: true } }));
+    // `song` lets the jam host clear that song from its request list.
+    document.dispatchEvent(new CustomEvent("songdetailchange", { detail: { open: true, song: currentDetailSong } }));
 
     // Lyrics-with-chords sheet (js/songsheet.js). Available for every song,
     // custom ones included -- a custom song is exactly where you'd paste
@@ -1182,6 +1226,7 @@
     closeDetail,
     renderSongRow,
     openSearch,
+    closeRequestSearch,
     getSong: (id) => findEntry(id),
     getDetailBpm: () => detailBpm,
     sortedLibrary,

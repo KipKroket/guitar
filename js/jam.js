@@ -30,6 +30,20 @@
   let followTimer = null;
   let lastSentSnapshot = null; // {song, sheet} last actually sent, to skip resending unchanged text
   let hostParticipantCount = 0;
+  // Song requests from followers, as last reported by /update:
+  // [{ key, songId, title, artist, art, count }], oldest first.
+  let hostRequests = [];
+  // A new (or more-wanted) request arrived and the host hasn't tapped the
+  // pill yet -- makes the pill pulse. Cleared on tap.
+  let requestsAttention = false;
+  // Keys the host just cleared. A poll already in flight can still carry
+  // them back for a moment, so they're filtered out until the server stops
+  // listing them (or 5s pass).
+  const pendingDismiss = new Map();
+  // Follower side: songs this follower already requested in this jam.
+  const requestedKeys = new Set();
+  let lastIslandSig = null; // see renderIsland()
+  let lastRequestsSig = null; // see renderSettings()
   let islandExpanded = false;
   let confirmStop = false;
   let autoFollow = true;
@@ -220,6 +234,7 @@
     try {
       const data = await api("/update", payload);
       hostParticipantCount = data.participantCount || 0;
+      applyHostRequests(data.requests || []);
       touchSession();
       renderIsland();
       renderSettings();
@@ -230,6 +245,102 @@
       // transient (offline, Worker hiccup) and just retried next tick.
       if (err.status === 403 || err.status === 404) stopJamLocal();
     }
+  }
+
+  /* ---- Song requests (host side) ---- */
+
+  // Loose "same song?" comparison: case, accents and punctuation ignored.
+  function looseKey(s) {
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
+  function applyHostRequests(list) {
+    const now = Date.now();
+    pendingDismiss.forEach((expiry, key) => {
+      if (expiry < now || !list.some((r) => r.key === key)) pendingDismiss.delete(key);
+    });
+    list = list.filter((r) => !pendingDismiss.has(r.key));
+    const before = new Map(hostRequests.map((r) => [r.key, r.count]));
+    if (list.some((r) => !before.has(r.key) || r.count > before.get(r.key))) requestsAttention = true;
+    hostRequests = list;
+  }
+
+  async function dismissRequest(key) {
+    hostRequests = hostRequests.filter((r) => r.key !== key);
+    pendingDismiss.set(key, Date.now() + 5000);
+    render();
+    if (!session || session.role !== "host") return;
+    try {
+      await api("/dismiss", { code: session.code, hostToken: session.hostToken, key });
+    } catch (err) {
+      /* the next /update lists it again if this didn't land */
+    }
+  }
+
+  function openRequest(r) {
+    const GL = window.GuitarLibrary;
+    if (!GL || !GL.openDetail) return;
+    islandExpanded = false;
+    // Opening it also clears it from the list (songdetailchange below).
+    GL.openDetail({
+      id: r.songId || "request:" + r.key,
+      title: r.title,
+      artist: r.artist,
+      album: "",
+      year: "",
+      artworkUrl: r.art || "",
+    });
+  }
+
+  // The host opened a song -- from the request list or on its own -- so
+  // that request is done.
+  document.addEventListener("songdetailchange", (e) => {
+    const song = e.detail && e.detail.open && e.detail.song;
+    if (!song || !session || session.role !== "host") return;
+    const t = looseKey(song.title);
+    const a = looseKey(song.artist);
+    hostRequests
+      .filter((r) => (song.id && r.songId === song.id) || (looseKey(r.title) === t && looseKey(r.artist) === a))
+      .forEach((r) => dismissRequest(r.key));
+  });
+
+  const X_ICON =
+    '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+  function buildRequestList(requests) {
+    const list = el("ul", "jam-req");
+    requests.forEach((r) => {
+      const li = el("li", "jam-req__item");
+      const main = el("button", "jam-req__main");
+      main.type = "button";
+      if (r.art) {
+        const img = document.createElement("img");
+        img.className = "jam-req__art";
+        img.alt = "";
+        img.src = r.art;
+        img.onerror = () => img.remove();
+        main.appendChild(img);
+      }
+      const text = el("span", "jam-req__text");
+      text.appendChild(el("span", "jam-req__title", r.title));
+      if (r.artist) text.appendChild(el("span", "jam-req__artist", r.artist));
+      main.appendChild(text);
+      if (r.count > 1) main.appendChild(el("span", "jam-req__count", "×" + r.count));
+      main.addEventListener("click", () => openRequest(r));
+      const x = el("button", "jam-req__x");
+      x.type = "button";
+      x.setAttribute("aria-label", "Remove request");
+      x.innerHTML = X_ICON;
+      x.addEventListener("click", () => dismissRequest(r.key));
+      li.appendChild(main);
+      li.appendChild(x);
+      list.appendChild(li);
+    });
+    return list;
   }
 
   // Fired straight from js/songsheet.js's markLine() -- fires its own
@@ -269,6 +380,9 @@
     saveSession(null);
     lastSentSnapshot = null;
     hostParticipantCount = 0;
+    hostRequests = [];
+    requestsAttention = false;
+    pendingDismiss.clear();
     confirmStop = false;
     islandExpanded = false;
     render();
@@ -326,6 +440,7 @@
     try {
       const data = await api("/poll", { code, followerId });
       saveSession({ role: "follower", code, followerId });
+      requestedKeys.clear();
       autoFollow = true;
       ensureFollowerView();
       updateFollowerView(data);
@@ -340,11 +455,38 @@
     }
   }
 
+  /* ---- Song requests (follower side) ---- */
+
+  function requestKey(song) {
+    return looseKey(song.title) + "|" + looseKey(song.artist);
+  }
+
+  // The normal catalogue search, with a Request button per result.
+  function openRequestSearch() {
+    const GL = window.GuitarLibrary;
+    if (!GL || !GL.openSearch || !session || session.role !== "follower") return;
+    GL.openSearch("", {
+      request: { send: requestSong, isSent: (song) => requestedKeys.has(requestKey(song)) },
+    });
+  }
+
+  async function requestSong(song) {
+    if (!session || session.role !== "follower") throw new Error("Not in a jam");
+    await api("/request", {
+      code: session.code,
+      followerId: session.followerId,
+      song: { id: song.id, title: song.title, artist: song.artist, art: song.artworkUrl || "" },
+    });
+    requestedKeys.add(requestKey(song));
+  }
+
   function leaveJam() {
     if (followTimer) {
       clearInterval(followTimer);
       followTimer = null;
     }
+    requestedKeys.clear();
+    if (window.GuitarLibrary && window.GuitarLibrary.closeRequestSearch) window.GuitarLibrary.closeRequestSearch();
     saveSession(null);
     teardownFollowerView();
     islandExpanded = false;
@@ -454,6 +596,11 @@
       }
     });
     followRow.appendChild(chordSwitch);
+
+    const requestBtn = el("button", "jam-view__request", "♪ Request a song");
+    requestBtn.type = "button";
+    requestBtn.addEventListener("click", openRequestSearch);
+    followRow.appendChild(requestBtn);
     root.appendChild(followRow);
 
     const waiting = el("p", "jam-view__waiting", "Waiting for the host to open a song…");
@@ -859,6 +1006,8 @@
     following: document.getElementById("jam-following"),
     followCode: document.getElementById("jam-follow-code"),
     leaveBtn: document.getElementById("jam-leave-btn"),
+    requests: document.getElementById("jam-host-requests"),
+    requestList: document.getElementById("jam-host-requests-list"),
   };
 
   function setStatus(el, msg, isError) {
@@ -883,6 +1032,17 @@
     if (isHost) {
       settingsEls.hostCode.textContent = session.code;
       settingsEls.hostCount.textContent = String(hostParticipantCount);
+      // Rebuilt only when the list changed -- this runs every host tick, and
+      // a rebuild under a finger would swallow the tap.
+      const sig = JSON.stringify(hostRequests);
+      if (sig !== lastRequestsSig && settingsEls.requests) {
+        lastRequestsSig = sig;
+        settingsEls.requests.hidden = hostRequests.length === 0;
+        settingsEls.requestList.textContent = "";
+        settingsEls.requestList.appendChild(buildRequestList(hostRequests));
+      }
+    } else {
+      lastRequestsSig = null;
     }
     if (isFollower) {
       settingsEls.followCode.textContent = session.code;
@@ -920,15 +1080,38 @@
     if (!session || !allowedHere) {
       island.hidden = true;
       island.textContent = "";
+      lastIslandSig = null;
       return;
     }
+    // Called every host tick -- skip the rebuild when nothing it shows has
+    // changed, so a tap on the request list isn't lost to a re-render and
+    // the pill's pulse doesn't restart every second.
+    const sig = [
+      session.role,
+      session.code,
+      hostParticipantCount,
+      islandExpanded,
+      confirmStop,
+      requestsAttention,
+      JSON.stringify(hostRequests),
+    ].join("|");
+    if (sig === lastIslandSig && !island.hidden && island.firstChild) return;
+    lastIslandSig = sig;
     island.hidden = false;
     island.textContent = "";
 
-    const pill = el("button", "jam-island__pill", session.role === "host" ? "Jam · " + hostParticipantCount : "Jam");
+    const reqCount = session.role === "host" ? hostRequests.length : 0;
+    let pillText = session.role === "host" ? "Jam · " + hostParticipantCount : "Jam";
+    if (reqCount) pillText += " · ♪ " + reqCount + (reqCount === 1 ? " request" : " requests");
+    const pill = el(
+      "button",
+      "jam-island__pill" + (reqCount ? " has-requests" : "") + (reqCount && requestsAttention ? " is-new" : ""),
+      pillText
+    );
     pill.type = "button";
     pill.addEventListener("click", () => {
       islandExpanded = !islandExpanded;
+      requestsAttention = false;
       renderIsland();
     });
     island.appendChild(pill);
@@ -936,6 +1119,10 @@
 
     const panel = el("div", "jam-island__panel");
     if (session.role === "host") {
+      if (reqCount) {
+        panel.appendChild(el("p", "jam-island__label", "Requested songs"));
+        panel.appendChild(buildRequestList(hostRequests));
+      }
       panel.appendChild(el("p", "jam-island__code", session.code));
       panel.appendChild(
         el("p", "jam-island__note", hostParticipantCount + (hostParticipantCount === 1 ? " person following" : " people following"))

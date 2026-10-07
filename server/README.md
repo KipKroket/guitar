@@ -53,6 +53,19 @@ live database (harmless to skip on a from-scratch install — there,
 2. **Code:** Workers & Pages → `guitar-sync` → **Edit code** → replace with
    `src/worker.js` → **Deploy**.
 
+## Shipping the jam song-request update to the live Worker
+
+Followers can request a song; the host sees the list in the jam panel. New
+table `jam_requests` and two endpoints (`/jam/request`, `/jam/dismiss`); the
+host's `/jam/update` response now also carries `requests`.
+
+1. **Schema:** D1 → `guitar-sync` → **Console**, paste and run the
+   `jam_requests` `CREATE TABLE` + `CREATE INDEX` from `schema.sql` (new
+   table, so no `ALTER` needed).
+2. **Code:** Workers & Pages → `guitar-sync` → **Edit code** → replace with
+   `src/worker.js` → **Deploy**. Deploy before the app update: with the old
+   Worker the app just shows no requests and "Request" fails with an error.
+
 ## Already deployed (2026-09-03)
 
 - Worker: **https://guitar-sync.julianleendertse.workers.dev** (this is the

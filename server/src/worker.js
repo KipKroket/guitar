@@ -8,9 +8,11 @@
 //   /song      { artist, title }             -> { candidates: [...] }   429 / 502
 //              { url }                       -> { raw, meta, source, url }   429 / 502
 //   /jam/create { song, sheet }               -> { code, hostToken }    400 / 429
-//   /jam/update { code, hostToken, song?, sheet?, mode?, pos?, mark? } -> { ok, participantCount }  403 / 404
+//   /jam/update { code, hostToken, song?, sheet?, mode?, pos?, mark? } -> { ok, participantCount, requests }  403 / 404
 //   /jam/poll   { code, followerId }          -> { ok, song, sheet, mode, pos, mark, participantCount }  404
 //   /jam/end    { code, hostToken }           -> { ok: true }           403 / 404
+//   /jam/request { code, followerId, song }   -> { ok: true }           400 / 404   (a follower asks for a song)
+//   /jam/dismiss { code, hostToken, key }     -> { ok: true }           403 / 404   (host clears a request)
 //
 // "libraries" is { guitar: {songs,tombstones}, piano: {songs,tombstones} }.
 // The server keeps its own copy and returns the MERGE of what it had and
@@ -77,6 +79,8 @@ export default {
       if (path === "/jam/update") return await jamUpdate(env, body);
       if (path === "/jam/poll") return await jamPoll(env, body);
       if (path === "/jam/end") return await jamEnd(env, body);
+      if (path === "/jam/request") return await jamRequest(env, body);
+      if (path === "/jam/dismiss") return await jamDismiss(env, body);
       return json({ error: "Not found" }, 404);
     } catch (err) {
       return json({ error: "Server error", detail: String(err && err.message || err) }, 500);
@@ -483,7 +487,11 @@ async function jamUpdate(env, body) {
   vals.push(code);
   await env.DB.prepare(`UPDATE jam_sessions SET ${sets.join(", ")} WHERE code = ?`).bind(...vals).run();
 
-  return json({ ok: true, participantCount: await jamParticipantCount(env, code) });
+  return json({
+    ok: true,
+    participantCount: await jamParticipantCount(env, code),
+    requests: await jamRequestList(env, code),
+  });
 }
 
 async function jamPoll(env, body) {
@@ -530,7 +538,93 @@ async function jamEnd(env, body) {
 
   await env.DB.prepare("DELETE FROM jam_sessions WHERE code = ?").bind(code).run();
   await env.DB.prepare("DELETE FROM jam_presence WHERE code = ?").bind(code).run();
+  await env.DB.prepare("DELETE FROM jam_requests WHERE code = ?").bind(code).run();
   return json({ ok: true });
+}
+
+/* ---- song requests: a follower asks the host to play something ----
+   Anonymous on purpose -- one row per (song, follower) so tapping Request
+   twice is a no-op, and the host sees one line per song with a count.
+   Only the host's /jam/update response carries the list. A request holds
+   just title/artist/artwork -- never a sheet; the host finds that itself. */
+
+async function jamRequest(env, body) {
+  const code = normJamCode(body && body.code);
+  const followerId = String((body && body.followerId) || "").slice(0, 64);
+  const song = (body && body.song) || {};
+  const title = String(song.title || "").trim().slice(0, 200);
+  const artist = String(song.artist || "").trim().slice(0, 200);
+  if (!code || !followerId || !title) return json({ error: "Bad request" }, 400);
+
+  const row = await env.DB.prepare("SELECT updated_at FROM jam_sessions WHERE code = ?").bind(code).first();
+  if (!row || Date.now() - row.updated_at > JAM_STALE_MS) {
+    return json({ error: "Jam not found or has ended" }, 404);
+  }
+
+  await env.DB
+    .prepare(
+      "INSERT OR IGNORE INTO jam_requests (code, song_key, follower_id, song_id, title, artist, art, created_at) " +
+        "VALUES (?,?,?,?,?,?,?,?)"
+    )
+    .bind(
+      code,
+      jamSongKey(title, artist),
+      followerId,
+      song.id ? String(song.id).slice(0, 100) : null,
+      title,
+      artist,
+      song.art ? String(song.art).slice(0, 4000) : null,
+      Date.now()
+    )
+    .run();
+  return json({ ok: true });
+}
+
+async function jamDismiss(env, body) {
+  const code = normJamCode(body && body.code);
+  const hostToken = String((body && body.hostToken) || "");
+  const key = String((body && body.key) || "").slice(0, 500);
+  if (!code || !key) return json({ error: "Bad request" }, 400);
+
+  const row = await env.DB.prepare("SELECT host_token FROM jam_sessions WHERE code = ?").bind(code).first();
+  if (!row) return json({ error: "Jam not found" }, 404);
+  if (!timingSafeEqual(hostToken, row.host_token)) return json({ error: "Not the host" }, 403);
+
+  await env.DB.prepare("DELETE FROM jam_requests WHERE code = ? AND song_key = ?").bind(code, key).run();
+  return json({ ok: true });
+}
+
+// One entry per song, oldest request first.
+async function jamRequestList(env, code) {
+  const { results } = await env.DB
+    .prepare(
+      "SELECT song_key, MIN(song_id) AS song_id, MIN(title) AS title, MIN(artist) AS artist, MIN(art) AS art, " +
+        "COUNT(*) AS n, MIN(created_at) AS at FROM jam_requests WHERE code = ? GROUP BY song_key ORDER BY at ASC"
+    )
+    .bind(code)
+    .all();
+  return (results || []).map((r) => ({
+    key: r.song_key,
+    songId: r.song_id,
+    title: r.title,
+    artist: r.artist,
+    art: r.art,
+    count: r.n,
+  }));
+}
+
+// "Wonderwall - Remastered" and "Wonderwall" are the same request: drop
+// bracketed bits and a trailing " - qualifier", fold case/accents/punctuation.
+function jamSongKey(title, artist) {
+  const fold = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const t = String(title || "").replace(/\s*[(\[][^)\]]*[)\]]/g, "").replace(/\s+-\s+.*$/, "");
+  return fold(t) + "|" + fold(artist);
 }
 
 async function jamParticipantCount(env, code) {

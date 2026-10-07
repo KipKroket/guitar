@@ -240,6 +240,12 @@
         <div id="jam-hosting" hidden>
           <div class="jam-code" id="jam-host-code" aria-label="Jam code"></div>
           <p class="settings-note"><span id="jam-host-count">0</span> following. Open any song and it is shared automatically.</p>
+          <!-- Songs followers asked for -- js/jam.js fills it. Tap a song to
+               open it (that also clears it), the cross removes it. -->
+          <div class="jam-requests" id="jam-host-requests" hidden>
+            <h3 class="jam-requests__title">Requested songs</h3>
+            <div id="jam-host-requests-list"></div>
+          </div>
           <div class="stack-actions">
             <button id="jam-host-share-btn" class="mic-button" type="button">Share link</button>
             <button id="jam-host-stop-btn" class="songsheet__btn songsheet__btn--danger" type="button">Stop jam</button>

@@ -118,6 +118,24 @@ CREATE TABLE IF NOT EXISTS jam_presence (
 );
 CREATE INDEX IF NOT EXISTS idx_jam_presence_code ON jam_presence (code, last_seen);
 
+-- Song requests: a follower asks the host to play a song (anonymous). One row
+-- per (song, follower), so a double tap is a no-op; the host's /jam/update
+-- response groups them per song_key with a count. Deleted when the host
+-- dismisses the song, opens it, or ends the jam. New table, so
+-- CREATE TABLE IF NOT EXISTS is enough on the already-deployed database.
+CREATE TABLE IF NOT EXISTS jam_requests (
+  code         TEXT NOT NULL,
+  song_key     TEXT NOT NULL,      -- normalised title|artist, see jamSongKey() in worker.js
+  follower_id  TEXT NOT NULL,
+  song_id      TEXT,               -- catalogue id (deezer:123), lets the host open the exact song
+  title        TEXT NOT NULL,
+  artist       TEXT NOT NULL DEFAULT '',
+  art          TEXT,
+  created_at   INTEGER NOT NULL,
+  PRIMARY KEY (code, song_key, follower_id)
+);
+CREATE INDEX IF NOT EXISTS idx_jam_requests_code ON jam_requests (code, created_at);
+
 -- /jam/create attempts per client IP, for basic abuse resistance -- same
 -- shape/purpose as fetch_attempts above.
 CREATE TABLE IF NOT EXISTS jam_create_attempts (
