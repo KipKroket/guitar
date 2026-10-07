@@ -136,6 +136,13 @@
     else begin();
   }
 
+  // Back to 0:00 with a fresh count-in, whether it was playing or paused.
+  function restart() {
+    pause();
+    basePos = 0;
+    begin();
+  }
+
   function seekTo(ms) {
     basePos = Math.max(0, ms);
     // Mid-song: jump on the spot, no new count-in.
@@ -368,6 +375,17 @@
     playPause.setAttribute("aria-label", "Play/pause");
     bar.appendChild(playPause);
 
+    const restartBtn = el("button", "audio-dock__bar-edit");
+    restartBtn.type = "button";
+    restartBtn.setAttribute("aria-label", "Restart from the beginning");
+    restartBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5M4.5 4v4.5H9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    restartBtn.addEventListener("click", () => {
+      restart();
+      refresh();
+    });
+    bar.appendChild(restartBtn);
+
     const status = el("p", "audio-dock__bar-status", "");
     bar.appendChild(status);
 
@@ -452,6 +470,7 @@
     getDuration: () => 0,
     isPlaying: () => running,
     togglePlay,
+    restart,
     pause,
     finish,
     seekTo,
