@@ -631,32 +631,79 @@
   }
 
   /* ---------- Tempo lookup (best effort) ---------- */
-  // The iTunes catalogue carries no tempo. TheAudioDB does (`intTempo`), is
-  // keyless (public test key "2"), and sends CORS headers, so a plain fetch
-  // works -- but it's only filled in for a subset of tracks. When it's
-  // missing or the request fails we just don't show a tempo.
+  // Two catalogues, both without a key:
+  //  - Deezer's own track record carries a `bpm` (about half the tracks have
+  //    one; 0 = unknown). It's analysed by software, so slow songs often come
+  //    back at double speed (Thinking Out Loud: 158 instead of 79).
+  //  - Music I Want (musiciwant.com, CORS-open, 100 requests/day per IP) looks
+  //    a song up by artist + title and tends to give the felt tempo.
+  // When Deezer's number is high and the other one is about half of it, the
+  // other one wins. TheAudioDB used to be asked here too; none of a 35-song
+  // test library had a tempo there, so it's gone. Results are kept in
+  // localStorage (misses only for a few days) so the daily limit isn't burned.
   const bpmCache = new Map();
+  const BPM_CACHE_KEY = "guitar-bpm-cache";
+  const BPM_MISS_MS = 3 * 24 * 3600 * 1000;
 
-  async function fetchBpm(artist, title) {
+  function readBpmStore() {
+    try {
+      return JSON.parse(localStorage.getItem(BPM_CACHE_KEY)) || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function validBpm(v) {
+    v = Math.round(Number(v));
+    return Number.isFinite(v) && v >= 40 && v <= 260 ? v : null;
+  }
+
+  // Resolves to a number, null (not known there) or undefined (couldn't ask).
+  async function deezerBpm(id) {
+    if (!/^deezer:\d+$/.test(id || "")) return null;
+    try {
+      const data = await loadJsonp("https://api.deezer.com/track/" + id.slice(7) + "?output=jsonp");
+      return validBpm(data && data.bpm);
+    } catch (err) {
+      return undefined;
+    }
+  }
+  async function musicIWantBpm(artist, title) {
+    try {
+      const q = new URLSearchParams({ title: cleanTitleForSearch(title || "").trim(), artist: (artist || "").trim() });
+      const res = await fetch("https://musiciwant.com/api/v1/song?" + q);
+      if (res.status === 404) return null;
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      return data && data.found && data.song ? validBpm(data.song.bpm) : null;
+    } catch (err) {
+      return undefined;
+    }
+  }
+  function pickBpm(dz, mw) {
+    if (dz && mw) return dz > 140 && Math.abs(mw * 2 - dz) <= dz * 0.12 ? mw : dz;
+    return dz || mw || null;
+  }
+
+  async function fetchBpm(artist, title, id) {
     const cacheKey = `${artist}␟${title}`.toLowerCase();
     if (bpmCache.has(cacheKey)) return bpmCache.get(cacheKey);
-    let bpm = null;
-    try {
-      const s = encodeURIComponent((artist || "").trim());
-      const t = encodeURIComponent(cleanTitleForSearch(title || "").trim());
-      const res = await fetch(
-        `https://www.theaudiodb.com/api/v1/json/2/searchtrack.php?s=${s}&t=${t}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const track = data && data.track && data.track[0];
-        const value = track && parseInt(track.intTempo, 10);
-        if (Number.isFinite(value) && value >= 40 && value <= 260) bpm = value;
-      }
-    } catch (err) {
-      /* offline / blocked -- no tempo shown, no error surfaced */
+    const hit = readBpmStore()[cacheKey];
+    if (hit && (hit.bpm || Date.now() - hit.at < BPM_MISS_MS)) {
+      bpmCache.set(cacheKey, hit.bpm);
+      return hit.bpm;
     }
+    const [dz, mw] = await Promise.all([deezerBpm(id), musicIWantBpm(artist, title)]);
+    const bpm = pickBpm(dz, mw);
+    // Both unreachable (offline): don't remember "no tempo".
+    if (dz === undefined && mw === undefined) return null;
     bpmCache.set(cacheKey, bpm);
+    try {
+      const store = readBpmStore();
+      store[cacheKey] = { bpm, at: Date.now() };
+      localStorage.setItem(BPM_CACHE_KEY, JSON.stringify(store));
+    } catch (err) {
+      /* just asked again next time */
+    }
     return bpm;
   }
 
@@ -739,10 +786,10 @@
     // your own sheet.
     if (window.GuitarSongSheet) window.GuitarSongSheet.open(currentDetailSong, opts);
 
-    // Best-effort tempo: if TheAudioDB knows it, show it beside the year and
+    // Best-effort tempo: if a catalogue knows it, show it beside the year and
     // reveal the "open in metronome" button.
     if (!custom) {
-      fetchBpm(currentDetailSong.artist, currentDetailSong.title).then((bpm) => {
+      fetchBpm(currentDetailSong.artist, currentDetailSong.title, currentDetailSong.id).then((bpm) => {
         if (mySeq !== detailSeq || detailOverlay.hidden || !bpm) return;
         detailBpm = bpm;
         detailBpmValue.textContent = String(bpm);

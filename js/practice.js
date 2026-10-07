@@ -277,6 +277,22 @@
     row.appendChild(plus);
     wrap.appendChild(row);
 
+    // The tempo is often found at double (or half) speed; and when nothing is
+    // known the quickest way is the same search you'd do by hand.
+    const fix = el("div", "practice__bars");
+    [["½", () => bpm / 2], ["2×", () => bpm * 2]].forEach(([text, next]) => {
+      const b = el("button", "practice__bars-btn", text);
+      b.type = "button";
+      b.addEventListener("click", () => apply(next()));
+      fix.appendChild(b);
+    });
+    const look = el("a", "practice__bars-btn", "Look up tempo");
+    look.href = "https://www.google.com/search?q=" + encodeURIComponent(((song && song.artist) || "") + " " + ((song && song.title) || "") + " tempo bpm");
+    look.target = "_blank";
+    look.rel = "noopener";
+    fix.appendChild(look);
+    wrap.appendChild(fix);
+
     const volHead = el("div", "audio-dock__speed-head");
     volHead.appendChild(el("span", null, "Click volume"));
     const volVal = el("span", "audio-dock__speed-val", volPct + "%");
@@ -327,6 +343,14 @@
     label.appendChild(box);
     label.appendChild(el("span", null, "Keep clicking during the song"));
     wrap.appendChild(label);
+    const credit = el("p", "audio-dock__hint", "Tempo data: Deezer and ");
+    const cl = el("a", null, "Music I Want");
+    cl.href = "https://musiciwant.com";
+    cl.target = "_blank";
+    cl.rel = "noopener";
+    credit.appendChild(cl);
+    credit.appendChild(document.createTextNode("."));
+    wrap.appendChild(credit);
     wrap.appendChild(el("p", "audio-dock__hint", "Press play: the count-in, then the lyrics follow the song's timing. The song starts on the higher click."));
     return wrap;
   }

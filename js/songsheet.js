@@ -1130,25 +1130,23 @@
     return null;
   }
 
-  // Practice (metronome, no recording) follows the timing already stored for
-  // this song's most recently used recording -- including an offset set by
-  // hand -- so it runs on the same timeline as the song itself. With none yet
-  // it gets a timing of its own, looked up without a recording length.
-  // Remembered per open sheet: this runs every frame, and a lookup storing a
-  // "practice" entry must not flip the key halfway.
+  // Practice (metronome, no recording) keeps its own timing record per song --
+  // anchors plus the offset the user sets by tapping the line they're on --
+  // so what is set while practicing never alters the offset of a recording.
+  // The recording length of the song's most recently used recording only
+  // steers which LRCLIB version is picked, so it's the same one that
+  // recording got. Remembered per open sheet: this runs every frame.
   function practiceTimingKey() {
     if (state.practiceTiming) return state.practiceTiming;
     const all = lsGet(TIMING_KEY, {});
     const prefix = state.song.id + "|";
     let best = null;
     Object.keys(all).forEach((k) => {
-      if (k.indexOf(prefix) === 0 && all[k] && (!best || (all[k].at || 0) > (all[best].at || 0))) best = k;
+      if (k.indexOf(prefix) !== 0 || k === prefix + "practice" || !all[k]) return;
+      if (!best || (all[k].at || 0) > (all[best].at || 0)) best = k;
     });
     const lrc = best && all[best].lrc;
-    state.practiceTiming = {
-      key: best ? best.slice(prefix.length) : "practice",
-      dur: lrc && lrc.duration ? lrc.duration * 1000 : 0,
-    };
+    state.practiceTiming = { key: "practice", dur: lrc && lrc.duration ? lrc.duration * 1000 : 0 };
     return state.practiceTiming;
   }
 
@@ -1351,8 +1349,11 @@
 
   function afterChoice() {
     const T = state.timing;
-    // Practice has no recording whose length could be off.
-    T.status = !T.practice && Math.abs(T.durDiff) > 2 && !T.touched ? "warn" : "synced";
+    // With a recording the timing is suspect when its length differs from the
+    // LRCLIB version's. Practice has no recording to compare, so until the
+    // user has said where they are once, it always asks.
+    const off = T.practice ? !T.touched : Math.abs(T.durDiff) > 2 && !T.touched;
+    T.status = off ? "warn" : "synced";
     persistTiming();
     // The recording is not the length of the version LRCLIB has: ask right
     // away which line is being sung, instead of making the user dig for it.
@@ -1467,7 +1468,8 @@
     if (state.calibrating) {
       const banner = el("div", "sync-fix");
       banner.appendChild(
-        el("span", null, (T.status === "warn" ? "Timing may be off. " : "") + "Tap the line you hear right now.")
+        el("span", null, (T.status === "warn" ? "Timing may be off. " : "") +
+            (T.practice ? "Play along, then tap the line you're on right now." : "Tap the line you hear right now."))
       );
       const done = el("button", "songsheet__btn songsheet__btn--sm", T.status === "warn" ? "It's fine" : "Cancel");
       done.type = "button";
