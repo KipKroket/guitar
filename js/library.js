@@ -1136,6 +1136,7 @@
     renderSongRow,
     openSearch,
     getSong: (id) => findEntry(id),
+    getDetailBpm: () => detailBpm,
     sortedLibrary,
   };
 

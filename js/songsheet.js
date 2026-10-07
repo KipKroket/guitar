@@ -956,6 +956,12 @@
       }
       T.nowEnd = endIdx;
       applyNowHighlight(idx, endIdx);
+      // Practice has no recording that ends by itself: stop and rewind a
+      // while after the last timed line.
+      if (active.practice && active.playing && T.anchors.length) {
+        const last = T.anchors[T.anchors.length - 1];
+        if (active.ms > last.ms + T.offsetMs + 20000) window.GuitarPractice.finish();
+      }
       // Tell the jam right away when the lit line moves (a new line, a skip),
       // so followers don't wait for the next interval tick.
       if (idx !== lastNowIdx && window.GuitarJam && window.GuitarJam.hostNudge) window.GuitarJam.hostNudge();
@@ -1116,7 +1122,34 @@
       const ms = B.getPosition();
       if (key && ms != null) return { key, ms, dur: B.getDuration(), playing: B.isPlaying() };
     }
+    if (dock.isNowPlaying("practice") && window.GuitarPractice && state) {
+      const P = window.GuitarPractice;
+      const pk = practiceTimingKey();
+      return { key: pk.key, ms: P.getPosition(), dur: pk.dur, playing: P.isPlaying(), practice: true };
+    }
     return null;
+  }
+
+  // Practice (metronome, no recording) follows the timing already stored for
+  // this song's most recently used recording -- including an offset set by
+  // hand -- so it runs on the same timeline as the song itself. With none yet
+  // it gets a timing of its own, looked up without a recording length.
+  // Remembered per open sheet: this runs every frame, and a lookup storing a
+  // "practice" entry must not flip the key halfway.
+  function practiceTimingKey() {
+    if (state.practiceTiming) return state.practiceTiming;
+    const all = lsGet(TIMING_KEY, {});
+    const prefix = state.song.id + "|";
+    let best = null;
+    Object.keys(all).forEach((k) => {
+      if (k.indexOf(prefix) === 0 && all[k] && (!best || (all[k].at || 0) > (all[best].at || 0))) best = k;
+    });
+    const lrc = best && all[best].lrc;
+    state.practiceTiming = {
+      key: best ? best.slice(prefix.length) : "practice",
+      dur: lrc && lrc.duration ? lrc.duration * 1000 : 0,
+    };
+    return state.practiceTiming;
   }
 
   // Skips the recording to where line `idx` is sung -- the moment that line
@@ -1138,7 +1171,12 @@
         break;
       }
     }
-    const src = window.GuitarAudioDock && window.GuitarAudioDock.isNowPlaying("spotify") ? window.GuitarSpotify : window.GuitarBackingTrack;
+    const dock = window.GuitarAudioDock;
+    const src = dock.isNowPlaying("practice")
+      ? window.GuitarPractice
+      : dock.isNowPlaying("spotify")
+        ? window.GuitarSpotify
+        : window.GuitarBackingTrack;
     if (!src || !src.seekTo) return;
     src.seekTo(ms);
     // The tap's touchstart counted as "scrolling by hand" -- but this one
@@ -1153,7 +1191,7 @@
   // cued, not only once it has a playback position.
   function audioLoaded() {
     const dock = window.GuitarAudioDock;
-    return !!(dock && (dock.isNowPlaying("spotify") || dock.isNowPlaying("backingtrack")));
+    return !!(dock && (dock.isNowPlaying("spotify") || dock.isNowPlaying("backingtrack") || dock.isNowPlaying("practice")));
   }
   function timingReady() {
     const T = state && state.timing;
@@ -1210,6 +1248,7 @@
   // forgets the timing when the recording goes away.
   function updateTimingFor(active) {
     if (!active) {
+      state.practiceTiming = null;
       if (state.timing) {
         state.timing = null;
         state.calibrating = false;
@@ -1219,12 +1258,13 @@
       return;
     }
     let T = state.timing;
-    if (!T || T.key !== active.key) {
+    if (!T || T.key !== active.key || T.practice !== !!active.practice) {
       T = state.timing = freshTiming(active.key);
+      T.practice = !!active.practice;
       state.calibrating = false;
       renderTransport();
     }
-    if (T.status === "idle" && (active.dur > 0 || performance.now() - T.t0 > 3000)) {
+    if (T.status === "idle" && (active.dur > 0 || active.practice || performance.now() - T.t0 > 3000)) {
       T.durMs = active.dur || 0;
       startLookup(false);
     }
@@ -1311,7 +1351,8 @@
 
   function afterChoice() {
     const T = state.timing;
-    T.status = Math.abs(T.durDiff) > 2 && !T.touched ? "warn" : "synced";
+    // Practice has no recording whose length could be off.
+    T.status = !T.practice && Math.abs(T.durDiff) > 2 && !T.touched ? "warn" : "synced";
     persistTiming();
     // The recording is not the length of the version LRCLIB has: ask right
     // away which line is being sung, instead of making the user dig for it.
@@ -1734,6 +1775,7 @@
     const dock = window.GuitarAudioDock;
     if (dock && dock.isNowPlaying("spotify") && window.GuitarSpotify) window.GuitarSpotify.togglePlay();
     else if (dock && dock.isNowPlaying("backingtrack") && window.GuitarBackingTrack) window.GuitarBackingTrack.togglePlay();
+    else if (dock && dock.isNowPlaying("practice") && window.GuitarPractice) window.GuitarPractice.togglePlay();
   }
 
   function renderTransport() {
@@ -1805,7 +1847,7 @@
     };
     if (follows) {
       const head = el("div", "transport__pace-head");
-      head.appendChild(el("span", "transport__pace-label transport__pace-label--synced", "Follows the audio"));
+      head.appendChild(el("span", "transport__pace-label transport__pace-label--synced", active && active.practice ? "Follows the timing" : "Follows the audio"));
       head.appendChild(modeLink("Fixed tempo", true));
       pace.appendChild(head);
     } else if (drivesAudio) {
@@ -1819,7 +1861,7 @@
       if (canFollow) label = "Fixed tempo";
       else if (audioLoaded() && T && (T.status === "none" || T.status === "error")) label = "Fixed tempo · no timing";
       head.appendChild(el("span", "transport__pace-label", label));
-      if (canFollow) head.appendChild(modeLink("Follow audio", false));
+      if (canFollow) head.appendChild(modeLink(active && active.practice ? "Follow timing" : "Follow audio", false));
       else if (audioLoaded() && T && (T.status === "none" || T.status === "error") && T.note !== "nosheet") {
         const retry = el("button", "transport__mode", "Try again");
         retry.type = "button";

@@ -1303,6 +1303,24 @@ body[data-instrument="piano"] .instrument-switch__icon--piano,
   margin: 0;
 }
 .audio-dock__bar-status--error { color: var(--amber-deep); }
+/* Practice (metronome) source: icon tile in place of the thumbnail, and the
+   tempo popover's stepper row + checkbox. */
+.audio-dock__bar-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+}
+.practice__row { display: flex; align-items: center; gap: 0.6rem; }
+.practice__row input[type="range"] { flex: 1; min-width: 0; }
+.practice__row .audio-dock__bar-speed { width: 34px; height: 34px; padding: 0; font-size: 1.05rem; }
+.practice__check { display: flex; align-items: center; gap: 0.55rem; font-size: 0.88rem; color: var(--ink); }
+.practice__check input { accent-color: var(--amber); width: 1.05rem; height: 1.05rem; }
 
 .songsheet__chip {
   flex: 0 0 auto;
