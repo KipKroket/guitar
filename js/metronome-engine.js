@@ -19,14 +19,36 @@ class MetronomeEngine {
     this.timerId = null;
 
     this.onSchedule = null; // (beatInBar, time) -- called the instant a click is queued
+
+    // Optional extras, all off by default (the Tools metronome uses none):
+    this.wave = "sine";     // oscillator shape -- "square" cuts through music far better
+    this.volume = 0.9;      // master gain; above 1 only makes sense with the limiter
+    this.limiter = false;   // soft ceiling so a boosted volume doesn't clip
+    this.toneFor = null;    // (clickNumber since start) -> { freq, peak, len } to override one click
+    this.clickCount = 0;
+  }
+
+  setVolume(v) {
+    this.volume = v;
+    if (this.gain) this.gain.gain.value = v;
   }
 
   _ensureCtx() {
     if (!this.audioCtx) {
       this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       this.gain = this.audioCtx.createGain();
-      this.gain.gain.value = 0.9;
-      this.gain.connect(this.audioCtx.destination);
+      this.gain.gain.value = this.volume;
+      if (this.limiter) {
+        const lim = this.audioCtx.createDynamicsCompressor();
+        lim.threshold.value = -3;
+        lim.knee.value = 0;
+        lim.ratio.value = 20;
+        lim.attack.value = 0.001;
+        lim.release.value = 0.05;
+        this.gain.connect(lim).connect(this.audioCtx.destination);
+      } else {
+        this.gain.connect(this.audioCtx.destination);
+      }
     }
   }
 
@@ -49,6 +71,7 @@ class MetronomeEngine {
     this.onSchedule = onSchedule;
     this.running = true;
     this.currentBeatInBar = 0;
+    this.clickCount = 0;
     this.nextNoteTime = this.audioCtx.currentTime + 0.05;
     this._scheduler();
   }
@@ -61,17 +84,23 @@ class MetronomeEngine {
 
   _scheduleClick(beatInBar, time) {
     const isAccent = beatInBar === 0;
+    const custom = this.toneFor ? this.toneFor(this.clickCount) : null;
+    this.clickCount++;
+    const freq = custom ? custom.freq : isAccent ? 1560 : 1040;
+    const peak = custom ? custom.peak : isAccent ? 1 : 0.55;
+    const len = custom ? custom.len : 0.05;
     const osc = this.audioCtx.createOscillator();
     const clickGain = this.audioCtx.createGain();
-    osc.frequency.value = isAccent ? 1560 : 1040;
+    osc.type = this.wave;
+    osc.frequency.value = freq;
 
     clickGain.gain.setValueAtTime(0, time);
-    clickGain.gain.linearRampToValueAtTime(isAccent ? 1 : 0.55, time + 0.002);
-    clickGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    clickGain.gain.linearRampToValueAtTime(peak, time + 0.002);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, time + len);
 
     osc.connect(clickGain).connect(this.gain);
     osc.start(time);
-    osc.stop(time + 0.06);
+    osc.stop(time + len + 0.01);
 
     if (this.onSchedule) this.onSchedule(beatInBar, time);
   }

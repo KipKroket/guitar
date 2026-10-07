@@ -10,12 +10,22 @@
 (function () {
   const BEATS = 4;
   const CLICK_KEY = "guitar-practice-click";
+  const BARS_KEY = "guitar-practice-bars";
+  const VOL_KEY = "guitar-practice-volume";
   const DEFAULT_BPM = 100;
+  // The click has to be heard over a guitar (and next to Spotify's volume),
+  // so it's a square wave through a limiter; the slider is 10-100% of 3x gain.
+  const MAX_GAIN = 3;
+  // The click the song starts on: higher and longer than the count-in's.
+  const START_TONE = { freq: 2200, peak: 1, len: 0.16 };
 
   let engine = null;
   let song = null;
   let bpm = DEFAULT_BPM;
+  let bpmKnown = false; // false while it's just the default guess: nothing set by hand, no tempo from the catalogue
   let clickDuring = loadClickPref();
+  let bars = loadNum(BARS_KEY, 1, 0, 2); // count-in length in bars (0 = none)
+  let volPct = loadNum(VOL_KEY, 70, 10, 100);
   let running = false; // count-in or song running
   let basePos = 0; // ms the song clock starts from after the count-in
   let startAt = null; // audio time of the downbeat the song starts on
@@ -23,6 +33,21 @@
   let scheduled = 0;
   let ticker = null;
 
+  function loadNum(key, fallback, min, max) {
+    try {
+      const v = parseInt(localStorage.getItem(key), 10);
+      return v >= min && v <= max ? v : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+  function saveNum(key, v) {
+    try {
+      localStorage.setItem(key, String(v));
+    } catch (e) {
+      /* fine to just not remember it */
+    }
+  }
   function loadClickPref() {
     try {
       return localStorage.getItem(CLICK_KEY) !== "0";
@@ -53,7 +78,12 @@
     if (!engine) {
       engine = new window.GuitarMetronomeEngine.MetronomeEngine();
       engine.setBeatsPerBar(BEATS);
+      engine.wave = "square";
+      engine.limiter = true;
+      engine.volume = (volPct / 100) * MAX_GAIN;
     }
+    // Which click the song starts on depends on the count-in length picked now.
+    engine.toneFor = (n) => (n === countClicks() ? START_TONE : null);
     return engine;
   }
   // What's audible right now, in audio-clock seconds (output latency removed).
@@ -61,6 +91,10 @@
     const ctx = engine && engine.audioCtx;
     if (!ctx) return 0;
     return ctx.currentTime - (ctx.outputLatency || 0);
+  }
+
+  function countClicks() {
+    return BEATS * bars;
   }
 
   function getPosition() {
@@ -75,12 +109,13 @@
     scheduled = 0;
     startAt = null;
     clickTimes = [];
+    goUntil = 0;
     running = true;
     engine.start((beat, time) => {
       if (!running) return;
-      if (scheduled < BEATS) clickTimes.push(time);
-      else if (scheduled === BEATS) {
-        // The downbeat after the count-in bar: the song starts here.
+      if (scheduled < countClicks()) clickTimes.push(time);
+      else if (scheduled === countClicks()) {
+        // The downbeat after the count-in: the song starts here.
         startAt = time;
         if (!clickDuring) engine.stop();
       }
@@ -115,6 +150,7 @@
 
   function setBpm(v) {
     bpm = Math.max(30, Math.min(300, Math.round(v)));
+    bpmKnown = true;
     if (engine) engine.setBpm(bpm);
     if (song) {
       song.practiceBpm = bpm;
@@ -125,9 +161,13 @@
   }
 
   function startingBpm(s) {
-    if (s && s.practiceBpm) return s.practiceBpm;
+    if (s && s.practiceBpm) {
+      bpmKnown = true;
+      return s.practiceBpm;
+    }
     const lib = window.GuitarLibrary;
     const fromLib = lib && lib.getDetailBpm && lib.getDetailBpm();
+    bpmKnown = !!fromLib;
     return fromLib ? Math.round(fromLib) : DEFAULT_BPM;
   }
 
@@ -149,6 +189,55 @@
     basePos = 0;
     stopTicker();
     song = null;
+    if (countEl) {
+      countEl.remove();
+      countEl = null;
+    }
+  }
+
+  // The big 1-2-3-4 over the lyrics during the count-in, and "Go!" when the
+  // song starts. Driven off the same audio times as the clicks; doesn't take
+  // taps (the lyrics underneath stay usable).
+  let countEl = null;
+  let shown = ""; // what the overlay currently says
+  let goUntil = 0;
+  function showCount(text, kind) {
+    if (!countEl) {
+      countEl = el("div", "practice__count");
+      countEl.setAttribute("aria-hidden", "true");
+      document.body.appendChild(countEl);
+    }
+    const key = kind + text;
+    if (key === shown) return;
+    shown = key;
+    countEl.textContent = text;
+    countEl.className = "practice__count is-" + kind;
+    void countEl.offsetWidth; // restart the pop
+    countEl.classList.add("is-pop");
+  }
+  function hideCount() {
+    if (countEl && shown) {
+      countEl.className = "practice__count";
+      countEl.textContent = "";
+    }
+    shown = "";
+  }
+  function updateCount() {
+    if (!running || !countClicks()) {
+      hideCount();
+      return;
+    }
+    const now = audibleNow();
+    if (startAt != null && now >= startAt) {
+      if (goUntil === 0) goUntil = performance.now() + 800;
+      if (performance.now() < goUntil) showCount("Go!", "go");
+      else hideCount();
+      return;
+    }
+    goUntil = 0;
+    const heard = clickTimes.filter((t) => t <= now).length;
+    if (heard) showCount(String(((heard - 1) % BEATS) + 1), "count");
+    else hideCount();
   }
 
   // BPM and "click during the song" live in a small popover over the bar.
@@ -159,6 +248,7 @@
     const val = el("span", "audio-dock__speed-val", bpm + " BPM");
     head.appendChild(val);
     wrap.appendChild(head);
+    if (!bpmKnown) wrap.appendChild(el("p", "audio-dock__hint", "No tempo known for this song yet — set it to match the recording."));
 
     const row = el("div", "practice__row");
     const minus = el("button", "audio-dock__bar-speed", "−");
@@ -187,6 +277,41 @@
     row.appendChild(plus);
     wrap.appendChild(row);
 
+    const volHead = el("div", "audio-dock__speed-head");
+    volHead.appendChild(el("span", null, "Click volume"));
+    const volVal = el("span", "audio-dock__speed-val", volPct + "%");
+    volHead.appendChild(volVal);
+    wrap.appendChild(volHead);
+    const vol = el("input");
+    vol.type = "range";
+    vol.min = "10";
+    vol.max = "100";
+    vol.step = "5";
+    vol.value = String(volPct);
+    vol.addEventListener("input", () => {
+      volPct = parseInt(vol.value, 10);
+      volVal.textContent = volPct + "%";
+      saveNum(VOL_KEY, volPct);
+      if (engine) engine.setVolume((volPct / 100) * MAX_GAIN);
+    });
+    wrap.appendChild(vol);
+
+    const barsHead = el("div", "audio-dock__speed-head");
+    barsHead.appendChild(el("span", null, "Count-in"));
+    wrap.appendChild(barsHead);
+    const barsRow = el("div", "practice__bars");
+    [[0, "None"], [1, "1 bar"], [2, "2 bars"]].forEach(([n, text]) => {
+      const b = el("button", "practice__bars-btn" + (bars === n ? " is-active" : ""), text);
+      b.type = "button";
+      b.addEventListener("click", () => {
+        bars = n;
+        saveNum(BARS_KEY, n);
+        barsRow.querySelectorAll(".practice__bars-btn").forEach((x) => x.classList.toggle("is-active", x === b));
+      });
+      barsRow.appendChild(b);
+    });
+    wrap.appendChild(barsRow);
+
     const label = el("label", "practice__check");
     const box = el("input");
     box.type = "checkbox";
@@ -202,7 +327,7 @@
     label.appendChild(box);
     label.appendChild(el("span", null, "Keep clicking during the song"));
     wrap.appendChild(label);
-    wrap.appendChild(el("p", "audio-dock__hint", "Press play: one count-in bar, then the lyrics follow the song's timing."));
+    wrap.appendChild(el("p", "audio-dock__hint", "Press play: the count-in, then the lyrics follow the song's timing. The song starts on the higher click."));
     return wrap;
   }
 
@@ -222,7 +347,7 @@
     const status = el("p", "audio-dock__bar-status", "");
     bar.appendChild(status);
 
-    const bpmBtn = el("button", "audio-dock__bar-speed");
+    const bpmBtn = el("button", "audio-dock__bar-speed practice__bpm");
     bpmBtn.type = "button";
     bpmBtn.setAttribute("aria-label", "Tempo");
     bpmBtn.addEventListener("click", () => {
@@ -240,13 +365,16 @@
 
     function refresh() {
       bpmBtn.textContent = bpm + " BPM";
+      // No tempo known for this song: the number is only a guess.
+      bpmBtn.classList.toggle("is-guess", !bpmKnown);
+      if (!bpmKnown) bpmBtn.appendChild(el("i", "practice__warn", "!"));
       playPause.innerHTML = running ? ICON_PAUSE : ICON_PLAY;
       playPause.classList.toggle("is-playing", running);
       let text;
       const now = audibleNow();
       if (running && (startAt == null || now < startAt)) {
         const heard = clickTimes.filter((t) => t <= now).length;
-        text = heard ? "Count-in " + Math.min(heard, BEATS) : "Get ready…";
+        text = heard ? "Count-in " + (((Math.min(heard, countClicks()) - 1) % BEATS) + 1) : "Get ready…";
       } else if (running) {
         text = formatTime(getPosition());
       } else {
@@ -260,7 +388,10 @@
     });
     refresh();
     stopTicker();
-    ticker = setInterval(refresh, 100);
+    ticker = setInterval(() => {
+      refresh();
+      updateCount();
+    }, 40);
     return bar;
   }
 
