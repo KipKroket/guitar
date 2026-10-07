@@ -30,6 +30,7 @@
   // above the lyrics" text a paste would produce. Empty string disables the
   // "Fetch automatically" button (paste still works).
   const FETCH_URL = "https://guitar-sync.julianleendertse.workers.dev/song";
+  const FETCH_TIMEOUT_MS = 30000;
 
   const NOTE_IDX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -2350,6 +2351,12 @@
     render();
     let data = null;
     let err = null;
+    // No answer must never leave "Looking it up…" on screen for good (a
+    // request can stall silently, e.g. after the PWA was suspended in the
+    // background): abort after FETCH_TIMEOUT_MS. The abort also covers
+    // reading the body.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     try {
       const body = url
         ? { url }
@@ -2358,6 +2365,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: ctrl.signal,
       });
       data = await res.json().catch(() => null);
       const ok = url ? !!(data && data.raw) : !!(data && Array.isArray(data.candidates) && data.candidates.length);
@@ -2365,8 +2373,15 @@
         err = (data && data.error) || "Fetch failed (" + res.status + ").";
       }
     } catch (e) {
-      err = navigator.onLine ? "Couldn't reach the fetch service." : "You're offline.";
+      err = !navigator.onLine
+        ? "You're offline."
+        : ctrl.signal.aborted
+          ? "The fetch service took too long."
+          : "Couldn't reach the fetch service.";
+    } finally {
+      clearTimeout(timer);
     }
+    if (!err && ctrl.signal.aborted) err = "The fetch service took too long.";
 
     // The overlay may have been closed, or moved to another song, while we
     // were waiting.
