@@ -555,6 +555,7 @@ select {
   cursor: pointer;
 }
 
+.instrument-switch[hidden] { display: none; }
 .instrument-switch__icon {
   position: absolute;
   top: 50%;
@@ -2816,13 +2817,14 @@ body[data-instrument="piano"] .seg__btn--tuner { display: none; }
 /* Follower: ask the host for a song. The search overlay sits above the
    follower's full-screen view (z-index 30) while it is in request mode. */
 .jam-view__request {
-  padding: 0.4rem 0.8rem;
+  flex: 1 1 auto;
+  padding: 0.6rem 1rem;
   border-radius: 999px;
   border: 1px solid var(--amber);
-  background: var(--surface);
-  color: var(--amber-deep);
+  background: var(--amber);
+  color: var(--bg);
   font-family: var(--font-body);
-  font-size: 0.8rem;
+  font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;

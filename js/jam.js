@@ -570,7 +570,6 @@
         if (followerLastData) applyFollowerHighlight(followerLastData);
       }
     });
-    followRow.appendChild(instrumentToggle);
 
     const chordSwitch = el("button", "jam-view__chord-switch");
     chordSwitch.type = "button";
@@ -596,6 +595,8 @@
       }
     });
     followRow.appendChild(chordSwitch);
+    // Only relevant while the chords are showing (see updateChordSwitchUI).
+    followRow.appendChild(instrumentToggle);
 
     const requestBtn = el("button", "jam-view__request", "♪ Request a song");
     requestBtn.type = "button";
@@ -673,6 +674,7 @@
     // exact spacing they have with chords on -- same as the host's own switch.
     followerEls.body.classList.toggle("songsheet--nochords", followerHideChords);
     followerEls.chordSwitch.setAttribute("aria-checked", followerHideChords ? "false" : "true");
+    followerEls.instrumentToggle.hidden = followerHideChords;
   }
 
   function updateInstrumentToggleUI() {
