@@ -234,9 +234,8 @@
             volume: 1,
           });
           player = p;
-          // Every song gets a brand-new player (see closePlayer()), so this is
-          // the one place a user tap can unlock audio for it -- ensurePlayer()
-          // is called straight from the Spotify button's click handler.
+          // Unlocks audio for the new player; ensurePlayer() is called
+          // straight from the Spotify button's click handler for this.
           try {
             if (p.activateElement) Promise.resolve(p.activateElement()).catch(() => {});
           } catch (e) {
@@ -289,9 +288,10 @@
   }
 
   // Throws away the current SDK player entirely, so the next ensurePlayer()
-  // builds a fresh one. Reconnecting the *same* player object after the
-  // connection has gone bad is what used to leave "Spotify couldn't
-  // connect" stuck until the whole app was restarted.
+  // builds a fresh one. Last resort only: the SDK is unreliable at coming up
+  // a *second* time in the same page (Build 78 made that the normal path --
+  // every second song then failed to connect), so the one player is kept
+  // for the whole session and only re-connected when it goes stale.
   function resetPlayer() {
     if (player) {
       try {
@@ -311,16 +311,15 @@
   let playToken = 0;
   let sessionOpen = false;
 
-  // Full teardown after a song: stop playback, disconnect the SDK player and
-  // forget the device. The next song connects from scratch -- a long-lived
-  // player is what went stale and ended in "couldn't connect".
+  // End of a song: stop playback and cancel anything still in flight for it.
+  // The SDK player itself stays connected for the next song.
   function closePlayer() {
     playToken++;
     sessionOpen = false;
     currentTrackId = null;
+    lastState = null;
     stopPosTicker();
     if (player) player.pause().catch(() => {});
-    resetPlayer();
   }
 
   // A backgrounded iOS app routinely loses the SDK's connection; nudge it
@@ -330,23 +329,52 @@
     if (document.visibilityState === "visible" && player && !deviceId) player.connect();
   });
 
+  // Re-establishes the Connect session on the *same* player object: a plain
+  // connect() first, and if "ready" still hasn't come back after a few
+  // seconds a full disconnect() + connect() cycle.
   function waitForDevice() {
     if (deviceId) return Promise.resolve(deviceId);
     if (!player) return Promise.reject(new Error("Spotify isn't connected."));
+    const p = player;
     return new Promise((resolve, reject) => {
+      const cycle = setTimeout(() => {
+        try {
+          p.disconnect();
+        } catch (e) {
+          /* already gone */
+        }
+        p.connect();
+      }, 4000);
       const timer = setTimeout(() => {
+        clearTimeout(cycle);
         deviceWaiters = deviceWaiters.filter((w) => w !== onReady);
         reject(new Error("Couldn't reconnect to Spotify."));
-      }, 3000);
+      }, 12000);
       function onReady(id) {
+        clearTimeout(cycle);
         clearTimeout(timer);
         resolve(id);
       }
       deviceWaiters.push(onReady);
-      // Nudges the SDK to re-establish its Connect session; a no-op if it's
-      // already (re)connecting on its own.
-      player.connect();
+      p.connect();
     });
+  }
+
+  // True unless Spotify's device list positively says our device is gone.
+  async function deviceListed(id) {
+    try {
+      const token = await getValidToken();
+      if (!token) return true;
+      const res = await fetch("https://api.spotify.com/v1/me/player/devices", {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!res.ok) return true;
+      const data = await res.json().catch(() => null);
+      if (!data || !Array.isArray(data.devices)) return true;
+      return data.devices.some((d) => d.id === id);
+    } catch (e) {
+      return true;
+    }
   }
 
   async function resolveTrackId(song) {
@@ -373,7 +401,7 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // Connects (fresh player if needed) and returns a usable device_id.
+  // Connects (creating the player the first time) and returns a usable device_id.
   async function readyDevice() {
     await ensurePlayer();
     // The device the SDK registered can have gone stale since (idle
@@ -383,8 +411,25 @@
     // *other* device (phone, desktop, ...) happens to be active, with
     // whatever it already had playing. Reconnecting first is what actually
     // prevents that "plays a random already-going track" behaviour.
+    if (deviceId && !(await deviceListed(deviceId))) deviceId = null;
     if (!deviceId) await waitForDevice();
     return deviceId;
+  }
+
+  // Gets a just-loaded (paused) track back to 0:00 and checks that it
+  // stuck: Spotify can resume a track where it was last left, a seek sent
+  // while the track is still loading is silently dropped, and the burst of
+  // audio before the pause moves the position anyway.
+  async function rewindToStart(my) {
+    for (let i = 0; i < 8; i++) {
+      if (playToken !== my || !player) return;
+      await player.pause().catch(() => {});
+      await player.seek(0).catch(() => {});
+      await sleep(350);
+      if (playToken !== my || !player) return;
+      const st = await player.getCurrentState().catch(() => null);
+      if (!st || (st.paused && st.position < 1000)) return;
+    }
   }
 
   // One round of "get this track playing on `device`". Returns true once the
@@ -415,12 +460,16 @@
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ uris: ["spotify:track:" + trackId], position_ms: 0 }),
       }).catch(() => null);
+      if (playToken !== my) {
+        pause(); // closed while the request was in flight
+        return true;
+      }
       if (res && !res.ok && res.status !== 204) {
         // A 404 here means Spotify no longer recognises this device_id at
-        // all -- drop the player so the next round reconnects from scratch
-        // instead of repeating the same failing request against a dead id.
+        // all -- forget it so the next round reconnects instead of repeating
+        // the same failing request against a dead id.
         if (res.status === 404) {
-          resetPlayer();
+          deviceId = null;
           return false;
         }
         if (res.status === 401 || res.status === 403) throw new Error("Playback failed.");
@@ -446,27 +495,23 @@
     // Whatever the previous song left behind must not be mistaken for this
     // one's state (see renderState()).
     lastState = null;
-    // Round 0 reuses the existing player; if that doesn't get the track
+    // Round 0 reuses the connected player; if that doesn't get the track
     // playing (stale device after an idle pause, a connection that quietly
-    // died, ...) round 1 throws it away and starts a brand-new one. The old
-    // code gave up silently after its attempts, leaving the bar stuck on
-    // "Connecting…" -- now it ends in a real error instead.
-    for (let round = 0; round < 2; round++) {
-      if (round > 0) resetPlayer();
+    // died, ...) round 1 reconnects the same player, and only round 2 throws
+    // it away for a brand-new one. Ends in a real error instead of leaving
+    // the bar stuck on "Connecting…".
+    for (let round = 0; round < 3; round++) {
+      if (round === 1 && player) deviceId = null;
+      if (round === 2) resetPlayer();
       let device;
       try {
         device = await readyDevice();
       } catch (err) {
         if (playToken !== my) return;
-        if (round > 0) throw err;
-        resetPlayer();
+        if (round > 1) throw err;
         continue;
       }
-      if (playToken !== my) {
-        // Closed while connecting: don't leave the fresh player running.
-        if (!sessionOpen) resetPlayer();
-        return;
-      }
+      if (playToken !== my) return;
       if (await tryPlay(device, trackId, my)) return;
       if (playToken !== my) return;
     }
@@ -617,9 +662,8 @@
         const cur = state.track_window && state.track_window.current_track;
         if (!cur || (cur.id !== currentTrackId && !(cur.linked_from && cur.linked_from.id === currentTrackId))) return;
         autoPauseArmed = false;
-        // Always land back on 0:00: Spotify can resume a track where it was
-        // last left, and the brief burst of audio moves the position too.
-        if (player) player.pause().catch(() => {}).then(() => seekTo(0));
+        // Always land back on 0:00 (see rewindToStart()).
+        rewindToStart(playToken);
         return; // the pause() call re-fires this listener with paused:true
       }
       status.hidden = true;
@@ -684,6 +728,10 @@
               loginBtn.addEventListener("click", () => login());
               panel.appendChild(loginBtn);
             }
+            const restartBtn = el("button", "songsheet__btn", "Restart app");
+            restartBtn.type = "button";
+            restartBtn.addEventListener("click", () => location.reload());
+            panel.appendChild(restartBtn);
             panel.appendChild(fallbackLink(song));
             return panel;
           },
@@ -714,15 +762,22 @@
       }
       onStateChange = null;
       if (window.GuitarBackingTrack) window.GuitarBackingTrack.stop();
-      // Must happen inside this tap: it's what lets mobile browsers start
-      // (or resume) audio from the SDK's player later on, outside a gesture.
       if (!isLoggedIn()) {
         window.GuitarAudioDock.togglePanel("spotify", () => buildLoginPanel(ctx.song), null);
         return;
       }
-      // Builds the fresh player (and unlocks its audio) right inside the tap;
-      // playSong() below picks up the same connection.
-      ensurePlayer().catch(() => {});
+      // Must happen inside this tap: it's what lets mobile browsers start
+      // (or resume) audio from the SDK's player later on, outside a gesture.
+      // The very first tap builds the player (and unlocks it) right here.
+      try {
+        if (player) {
+          if (player.activateElement) Promise.resolve(player.activateElement()).catch(() => {});
+        } else {
+          ensurePlayer().catch(() => {});
+        }
+      } catch (e) {
+        /* best effort */
+      }
       window.GuitarAudioDock.showNowPlaying("spotify", buildNowPlayingBar(ctx.song), () => {
         onStateChange = null;
         closePlayer();
