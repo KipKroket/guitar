@@ -377,24 +377,94 @@
     }
   }
 
-  async function resolveTrackId(song) {
-    if (song.spotifyTrackId) return song.spotifyTrackId;
-    const token = await getValidToken();
-    if (!token) return null;
-    const q = `${song.artist || ""} ${song.title || ""}`.trim();
+  // Lower-case, accent-free word list with "(Remastered)"/"- Live" style
+  // suffixes dropped, so "Het is al laat toch - 2019 Remaster" ~ "Het is al laat toch".
+  function titleWords(s) {
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/\(.*?\)|\[.*?\]/g, " ")
+      .replace(/\s+-\s+.*$/, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(" ")
+      .filter(Boolean);
+  }
+
+  // 0..1: share of the wanted title's words that the candidate has, penalised
+  // when the candidate is much longer. 1 = same title.
+  function titleScore(want, got) {
+    const w = titleWords(want);
+    const g = titleWords(got);
+    if (!w.length || !g.length) return 0;
+    const hit = w.filter((x) => g.includes(x)).length;
+    return (hit / w.length) * (hit / Math.max(g.length, w.length));
+  }
+
+  async function searchTracks(token, q) {
     const res = await fetch(
-      "https://api.spotify.com/v1/search?type=track&limit=1&q=" + encodeURIComponent(q),
+      "https://api.spotify.com/v1/search?type=track&limit=10&q=" + encodeURIComponent(q),
       { headers: { Authorization: "Bearer " + token } }
     );
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const data = await res.json().catch(() => null);
-    const track = data && data.tracks && data.tracks.items && data.tracks.items[0];
-    if (!track) return null;
-    song.spotifyTrackId = track.id;
-    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
-      window.GuitarLibrary.setSongField(song.id, { spotifyTrackId: track.id });
+    return (data && data.tracks && data.tracks.items) || [];
+  }
+
+  // A cached id can be wrong (an earlier lookup that grabbed another song by
+  // the same artist); check it against the song's title when Spotify answers.
+  async function cachedIdLooksRight(song, token) {
+    try {
+      const res = await fetch("https://api.spotify.com/v1/tracks/" + song.spotifyTrackId, {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!res.ok) return true;
+      const t = await res.json().catch(() => null);
+      return !t || !t.name || titleScore(song.title, t.name) >= 0.5;
+    } catch (e) {
+      return true;
     }
-    return track.id;
+  }
+
+  async function resolveTrackId(song) {
+    const token = await getValidToken();
+    if (!token) return null;
+    if (song.spotifyTrackId) {
+      if (await cachedIdLooksRight(song, token)) return song.spotifyTrackId;
+      song.spotifyTrackId = null;
+    }
+    const title = song.title || "";
+    const artist = song.artist || "";
+    // The exact-field query first, then a loose one: the loose query alone
+    // ranks the artist's bigger hits above the song that was asked for.
+    let items = await searchTracks(token, `track:"${title}" artist:"${artist}"`);
+    let best = null;
+    let bestScore = 0;
+    const pick = (list) => {
+      for (const t of list) {
+        const artistOk =
+          !artist ||
+          (t.artists || []).some((a) => titleScore(artist, a.name) >= 0.5);
+        const s = titleScore(title, t.name) + (artistOk ? 0.25 : 0);
+        if (s > bestScore) {
+          bestScore = s;
+          best = t;
+        }
+      }
+    };
+    pick(items);
+    if (!best || bestScore < 0.75) {
+      items = await searchTracks(token, `${artist} ${title}`.trim());
+      pick(items);
+    }
+    // Rather no match than the wrong song.
+    if (!best || titleScore(title, best.name) < 0.5) return null;
+    song.spotifyTrackId = best.id;
+    if (window.GuitarLibrary && window.GuitarLibrary.setSongField) {
+      window.GuitarLibrary.setSongField(song.id, { spotifyTrackId: best.id });
+    }
+    return best.id;
   }
 
   function sleep(ms) {
