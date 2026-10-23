@@ -76,6 +76,45 @@
     if (!wakeLock) requestWakeLock();
   }, 20000);
 
+  /* ---------- Keep-awake fallback video ---------- */
+  // The Wake Lock API can be granted and still not keep an iPhone awake (home-
+  // screen web apps on some iOS versions), so a silent, muted, looping 1-second
+  // video plays alongside it -- iOS never auto-locks while a video is playing.
+  // It has no audio track, so it doesn't touch Spotify or the mic. Started on
+  // the first tap (autoplay needs a gesture) and restarted whenever the page
+  // returns to the foreground or the OS pauses it.
+  const keepAwakeVideo = document.createElement("video");
+  keepAwakeVideo.setAttribute("playsinline", "");
+  keepAwakeVideo.setAttribute("muted", "");
+  keepAwakeVideo.setAttribute("aria-hidden", "true");
+  keepAwakeVideo.muted = true;
+  keepAwakeVideo.loop = true;
+  keepAwakeVideo.src = "data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAWlzb21tcDQxbXA0MgAAAAFtZGF0AAAAAAAAAT4AAAA2BgUtR1ZK3FxMQz+U78URPNFDqAEAAAMAAQMAAAMAAQIAAAfQCwAAAwAAAwAAAwISDAORKwGAAAAAJiW4IACD/x67v/70wYBE1CeG1bepiPbqe3D8suYhjOIAAPYEWnhwAAAAEiHhEEEX8fYE1ldhP66I4/zdEAAAABQhqIKEEH/2ntJG7gUmIri3orjUgAAAABIBqMGIIv/1Sx+GEyGaaG/HcTIAAAATAajDiHv/8Yg/uiAKUkew+zUUkAAAABQh4yGiIc/nW+DCc0XgPkEv1z3G7wAAABQhqQaENf/7bTRV7jAQNm8K8LsHHAAAABEBqUWIe/+cezbAxVJwsShQrwAAABEBqUeIa/+ReCGAgfctDpQp3QAAABEh5SWiIY8z/BQDUaZlTDdCIAAAA0xtb292AAAAbG12aGQAAAAA5wESNucBEjYAAAJYAAACWAABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAC2HRyYWsAAABcdGtoZAAAAAHnARI25wESNgAAAAEAAAAAAAACWAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAEAAAABAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAAlgAAAB4AAEAAAAAAlBtZGlhAAAAIG1kaGQAAAAA5wESNucBEjYAAAJYAAACWFXEAAAAAAAxaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAENvcmUgTWVkaWEgVmlkZW8AAAAB921pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAbdzdGJsAAAAoXN0c2QAAAAAAAAAAQAAAJFhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAAJ2F2Y0MBZAAL/+EADCdkAAusVlDDeBZgpQEABCjuPLD9+PgAAAAACmZpZWwBAAAAAApjaHJtAAAAAAAYc3R0cwAAAAAAAAABAAAACgAAADwAAABgY3R0cwAAAAAAAAAKAAAAAQAAAHgAAAABAAABLAAAAAEAAAB4AAAAAQAAAAAAAAABAAAAPAAAAAEAAAEsAAAAAQAAAHgAAAABAAAAAAAAAAEAAAA8AAAAAQAAAHgAAAAUc3RzcwAAAAAAAAABAAAAAQAAABZzZHRwAAAAACAQEBgYEBAYGBAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAoAAAABAAAAPHN0c3oAAAAAAAAAAAAAAAoAAABkAAAAFgAAABgAAAAWAAAAFwAAABgAAAAYAAAAFQAAABUAAAAVAAAAFHN0Y28AAAAAAAAAAQAAACw=";
+  keepAwakeVideo.style.cssText =
+    "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0.01;pointer-events:none;";
+  document.body.appendChild(keepAwakeVideo);
+  let keepAwakeArmed = false;
+  function startKeepAwakeVideo() {
+    if (document.visibilityState !== "visible") return;
+    const p = keepAwakeVideo.play();
+    if (p && p.catch) p.catch(() => {});
+  }
+  ["pointerdown", "touchend", "keydown"].forEach((ev) =>
+    document.addEventListener(ev, () => {
+      keepAwakeArmed = true;
+      if (keepAwakeVideo.paused) startKeepAwakeVideo();
+    }, { passive: true })
+  );
+  keepAwakeVideo.addEventListener("pause", () => {
+    if (keepAwakeArmed) setTimeout(startKeepAwakeVideo, 500);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (keepAwakeArmed && keepAwakeVideo.paused) startKeepAwakeVideo();
+  });
+  setInterval(() => {
+    if (keepAwakeArmed && keepAwakeVideo.paused) startKeepAwakeVideo();
+  }, 10000);
+
   /* ---------- Navigation ---------- */
   // Four tabs -- Songs, Setlists, Tools, Jam -- each a verb. Tools holds three
   // pages (Tuner, Metronome, Chords) behind one switch at the top; the tab
@@ -240,7 +279,7 @@
   // service-worker cache for a while after a deploy). BUMP THIS ON EVERY
   // DEPLOY, in lockstep with the CACHE name in sw.js -- the two always move
   // together so this number identifies the exact shipped code.
-  const BUILD = "80";
+  const BUILD = "81";
   const versionEl = document.getElementById("app-version");
   if (versionEl) versionEl.textContent = "Build " + BUILD;
 
