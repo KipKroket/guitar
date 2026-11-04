@@ -1409,7 +1409,9 @@
     }
     T.hint = "";
     state.calibrating = false;
-    setOffset(active.ms - (best.ms + 700)); // about 0.7 s to react
+    // The user taps exactly when the line starts being sung, so the tap
+    // moment IS the line's start: no reaction-time allowance.
+    setOffset(active.ms - best.ms);
     render();
   }
 
